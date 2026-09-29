@@ -1,0 +1,48 @@
+[project]
+name = "heliostat"
+version = "0.1.0"
+description = "Sun-tracking heliostat firmware for ESP32 / MicroPython"
+requires-python = ">=3.10"
+
+# Host-side only. The firmware itself has no dependencies beyond MicroPython.
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "mpremote>=1.24",
+]
+# Needed only to regenerate tools/reference/noaa_cases.json, which is committed.
+reference = [
+    "pvlib>=0.11",
+    "pandas>=2.0",
+    "numpy>=1.26",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+    "board: requires a physical ESP32 connected (deselect with '-m \"not board\"')",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = [
+    "UP036",  # firmware targets MicroPython, not the host's Python version
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Verbatim copy of the proven driver - do not reformat it, so upstream fixes
+# drop straight in.
+"firmware/hal/scservo.py" = ["ALL"]
+
+# Firmware runs on MicroPython, which is NOT CPython. B905 would have ruff
+# "fix" zip() calls by adding strict=, a keyword MicroPython's zip does not
+# accept -- the lint fix would break the board. Tests and tools run on CPython
+# and keep the rule.
+# SIM105 would replace try/except/pass with contextlib.suppress, and
+# MicroPython does not ship contextlib.
+"firmware/**/*.py" = ["B905", "SIM105"]
