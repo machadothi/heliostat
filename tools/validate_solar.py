@@ -32,7 +32,10 @@ sys.path.insert(0, str(REPO / "firmware"))
 from solar.sunpos import sun_position  # noqa: E402  (needs the path set first)
 
 VECTOR_TOLERANCE_DEG = 0.02
-BOARD_TOLERANCE_DEG = 0.001
+# Host vs board. The ESP32 build uses SINGLE-precision floats (confirmed by
+# tools/check_board.py), which leaves a few thousandths of a degree between
+# the two; the pass criterion is the board against NREL SPA, below.
+BOARD_TOLERANCE_DEG = 0.01
 
 
 def unit_vector(azimuth_deg, elevation_deg):
@@ -68,7 +71,7 @@ def run_on_board(cases, port):
     )
     if result.returncode != 0:
         sys.exit(
-            "board run failed (is firmware/solar deployed? try ./tools/deploy.sh)\n"
+            "board run failed (is the firmware deployed? try python3 tools/deploy.py)\n"
             + result.stderr.strip()
         )
 
@@ -90,7 +93,7 @@ def main() -> int:
     cases = load_cases()
     board = run_on_board(cases, args.port) if args.board else {}
 
-    worst_host = worst_board = 0.0
+    worst_host = worst_board = worst_board_spa = 0.0
     worst_host_label = worst_board_label = None
     failures = 0
 
@@ -116,6 +119,12 @@ def main() -> int:
             worst_board, worst_board_label = max(
                 (worst_board, worst_board_label), (board_error, case["label"])
             )
+            board_vs_spa = angle_between(
+                unit_vector(b_az, b_el), unit_vector(case["azimuth"], case["elevation"])
+            )
+            worst_board_spa = max(worst_board_spa, board_vs_spa)
+            if board_vs_spa >= VECTOR_TOLERANCE_DEG:
+                failures += 1
 
         over = host_error >= VECTOR_TOLERANCE_DEG or (
             board_error is not None and board_error >= BOARD_TOLERANCE_DEG
@@ -133,6 +142,7 @@ def main() -> int:
     print(f"  doubled at the beam      {2 * worst_host:.5f} deg")
     print("  sun's angular diameter   0.53 deg")
     if args.board:
+        print(f"worst BOARD vs NREL SPA    {worst_board_spa:.5f} deg  <- what the machine uses")
         print(f"worst host vs board        {worst_board:.6f} deg  ({worst_board_label})")
         if worst_board >= BOARD_TOLERANCE_DEG:
             print("  ^ the board's float precision is degrading the result")

@@ -31,10 +31,17 @@ class Clock:
             self._rate = rate
 
     def now(self):
-        """Current Unix epoch seconds, or None if time has never been set."""
+        """Current Unix epoch seconds, or None if time has never been set.
+
+        Whole seconds, deliberately. On the ESP32 floats are single precision,
+        and a Unix time of ~1.8e9 as a float resolves only 128 s -- the sun moves
+        half a degree in that. An int epoch plus an int elapsed stays exact
+        (MicroPython ints are arbitrary precision), and solar.julian then splits
+        it without loss. One second is 0.004 degrees of sun motion.
+        """
         if self._epoch is None:
             return None
-        return self._epoch + (self._monotonic() - self._set_at) * self._rate
+        return self._epoch + int((self._monotonic() - self._set_at) * self._rate)
 
     def is_valid(self, max_age_s=None):
         """Has time been set, and recently enough to still be trusted?

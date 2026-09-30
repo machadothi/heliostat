@@ -55,7 +55,11 @@ from control.safety import (
     Trip,
 )
 
-TELEMETRY_SAMPLES = 120
+# A short recent history only. Each sample costs RAM on a board with ~165 KB
+# total, shared with Bluetooth and WiFi during provisioning: 120 dict samples
+# filled ~35 KB over two minutes and ran the heap out (found on the bench). The
+# phone keeps any long history; the board does not need to.
+TELEMETRY_SAMPLES = 10
 
 # How long to hold a defocus before stowing anyway, if the axes never report
 # settled. Defocus is a few degrees of travel; this is generous.
@@ -104,6 +108,8 @@ class Tracker:
         self._sun = None  # (azimuth, apparent elevation)
         self._beam = None
         self._efficiency = None
+        self._tilt = None  # degrees from the calibrated (or boot) attitude
+        self._accel = None  # |a| in g; 1.0 at rest
 
     # ======================================================================
     # operator interface -- called from the HTTP and BLE handlers
@@ -171,6 +177,12 @@ class Tracker:
         if self.mode != modes.MANUAL:
             raise CommandRejected("jog requires manual mode")
         driver = (self.az, self.el)[axis_index]
+        # A jog can arrive before the first control cycle has read the servos.
+        for axis_driver in (self.az, self.el):
+            if axis_driver.position_deg() is None:
+                await axis_driver.update()
+            if axis_driver.position_deg() is None:
+                raise CommandRejected(f"{axis_driver.axis.name} position unknown")
         current = driver.state["target_deg"]
         if current is None:
             current = driver.position_deg()
@@ -221,6 +233,7 @@ class Tracker:
         time_ok = self._time_valid()
 
         tilt, accel = self._read(self.sensors.imu, (None, None))
+        self._tilt, self._accel = tilt, accel
         pressure, temp = self._read(self.sensors.baro, (None, None))
         if pressure is not None:
             self.pressure_trend.add(mono, pressure)
@@ -447,17 +460,11 @@ class Tracker:
         return device.read() if device is not None else default
 
     def _record(self, now):
+        # A flat tuple, not a dict: a fraction of the memory per sample.
+        # (time, mode, sun, position, beam, efficiency)
         self.telemetry.append(
-            {
-                "t": now,
-                "mode": self.mode,
-                "sun": self._sun,
-                "cmd": tuple(self._last_cmd),
-                "pos": (self.az.position_deg(), self.el.position_deg()),
-                "beam": self._beam,
-                "eff": self._efficiency,
-                "trips": [trip.rule for trip in self.trips],
-            }
+            (now, self.mode, self._sun, (self.az.position_deg(), self.el.position_deg()),
+             self._beam, self._efficiency)
         )
 
     def status(self):

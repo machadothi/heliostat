@@ -18,7 +18,7 @@ ERROR = 40
 _NAMES = {DEBUG: "DEBUG", INFO: "INFO", WARNING: "WARN", ERROR: "ERROR"}
 _LEVELS = {"debug": DEBUG, "info": INFO, "warning": WARNING, "error": ERROR}
 
-HISTORY_LINES = 40
+HISTORY_LINES = 20
 
 _level = INFO
 _history = RingBuffer(HISTORY_LINES)

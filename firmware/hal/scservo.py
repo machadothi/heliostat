@@ -157,7 +157,11 @@ class _Bus:
             # First ever transaction: grab enough for echo + reply and see
             # which one we actually got.
             buf = self._read_exact(len(packet) + n_expect)
-            if buf[:len(packet)] == packet:
+            # Decide by byte COUNT, not just content: a reply can be
+            # byte-identical to the packet that prompted it (a ping answered
+            # with status error bit 0 set is exactly the ping), so only
+            # "packet AND a full reply arrived" proves an echo.
+            if len(buf) >= len(packet) + n_expect and buf[:len(packet)] == packet:
                 self._echo = True
                 return buf[len(packet):]
             self._echo = False

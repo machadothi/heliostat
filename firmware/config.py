@@ -24,7 +24,14 @@ DEFAULTS = {
     "schema": SCHEMA_VERSION,
     # With sim on, hal/board.py builds simulated servos, switches and sensors.
     "sim": False,
+    # The ESP32 joins the phone's own network; BLE only hands over the credentials.
     "wifi": {"ssid": "", "psk": "", "hostname": "heliostat"},
+    "ble": {"name": "my_heliostat"},
+    # Normally-closed inputs: with nothing wired they read as OPEN, which would
+    # fault the machine instantly. Enable each only once it is actually wired.
+    "hardware": {"limit_switches": False, "estop": False},
+    # Gravity vector of the installed, level base; set by POST /api/imu/level.
+    "imu": {"level": None},
     "site": {"lat": 0.0, "lon": 0.0, "elev_m": 0.0, "tz_offset_min": 0},
     "mount": {"type": "azel"},
     "axes": [

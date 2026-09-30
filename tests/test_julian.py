@@ -135,3 +135,24 @@ def test_unix_from_civil_round_trips_through_datetime():
             ).timestamp()
         )
         assert unix_from_civil(year, month, day, hour, minute) == expected
+
+
+def test_clock_hands_the_solar_math_an_exact_integer():
+    """The split above is only as good as its input.
+
+    Found on the board: Clock.now() returned `int epoch + float elapsed`, which
+    on the ESP32 is a float32 -- 1.79e9 resolves only 128 s there (the log's
+    timestamps advanced in steps of exactly 128), so the time was already gone
+    before jdn_and_frac ever saw it. now() must stay an int.
+    """
+    from control.clock import Clock
+
+    elapsed = [0.0]
+    clock = Clock(lambda: elapsed[0], epoch=1_790_796_000)
+    elapsed[0] = 12.7
+    now = clock.now()
+    assert isinstance(now, int)
+    assert now == 1_790_796_012
+
+    # What the float path does on the board: snapped to a 128 s grid.
+    assert np.float32(1_790_796_000 + 12.7) == np.float32(1_790_796_032)

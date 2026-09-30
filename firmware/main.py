@@ -27,6 +27,22 @@ if _safe_mode_requested():
     print("=" * 46)
 else:
     try:
+        # One-second grace window: a Ctrl-C now lands at the REPL before the app
+        # (and Bluetooth) ever starts. tools/mpr.py relies on it to reach a clean
+        # REPL without a soft reset -- which can hang the ESP32 after BLE has run.
+        import time
+
+        print("starting app in 1 s (Ctrl-C for the REPL)")
+        time.sleep(1)
+
+        # Initialise the WiFi driver FIRST, before any large module is loaded.
+        # Its receive buffers come from the same RAM the Python heap grows into;
+        # created after the app's modules they could not be allocated
+        # ("Expected to init 10 rx buffer, actual is 3" -> Wifi Unknown Error
+        # 0x0101, ESP_ERR_NO_MEM), and the app died at startup.
+        import network
+
+        network.WLAN(network.STA_IF)
         import app
 
         app.run()

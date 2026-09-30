@@ -45,4 +45,6 @@ ignore = [
 # and keep the rule.
 # SIM105 would replace try/except/pass with contextlib.suppress, and
 # MicroPython does not ship contextlib.
-"firmware/**/*.py" = ["B905", "SIM105"]
+# B904 wants `raise ... from`; MicroPython accepts the syntax but drops the
+# cause, so it buys nothing on the board.
+"firmware/**/*.py" = ["B905", "SIM105", "B904"]
