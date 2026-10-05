@@ -30,6 +30,8 @@ REFERENCE = REPO / "tools" / "reference" / "noaa_cases.json"
 sys.path.insert(0, str(REPO / "firmware"))
 
 from solar.sunpos import sun_position  # noqa: E402  (needs the path set first)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from port import default_port  # noqa: E402
 
 VECTOR_TOLERANCE_DEG = 0.02
 # Host vs board. The ESP32 build uses SINGLE-precision floats (confirmed by
@@ -86,7 +88,7 @@ def run_on_board(cases, port):
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--board", action="store_true", help="also run on the ESP32")
-    parser.add_argument("--port", default="/dev/ttyUSB0")
+    parser.add_argument("--port", default=default_port())
     parser.add_argument("--verbose", action="store_true", help="print every case")
     args = parser.parse_args()
 

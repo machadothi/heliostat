@@ -1,0 +1,9 @@
+{
+  "description": "M5Stack AtomS3R: ESP32-S3, 8 MB PSRAM, screen, BMI270 + BMM150; native USB-Serial-JTAG",
+  "profile": "atoms3r",
+  "micropython_board_dir": "atoms3r/micropython",
+  "chip": "esp32s3",
+  "usb_match": ["Espressif_USB_JTAG"],
+  "app_offset": "0x10000",
+  "full_image_offset": "0x0"
+}

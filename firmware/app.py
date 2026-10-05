@@ -26,7 +26,7 @@ from control.clock import Clock
 from control.tracker import Tracker
 from hal import board
 from util import log
-from util.mem import idf_heap
+from util.mem import idf_heap, reset_cause
 from util.monotime import monotonic
 
 MAX_CYCLE_FAILURES = 3
@@ -132,10 +132,78 @@ class BleManager:
             await asyncio.sleep(0.25)
 
 
+async def drain_console():
+    """Keep reading (and discarding) the console's input while the app runs.
+
+    On the AtomS3R the console is the chip's USB-Serial-JTAG. MicroPython
+    moves its received bytes into a 256-byte stdin buffer, and checks them for
+    Ctrl-C on the way, only while that buffer has room; and bytes that arrive
+    during boot can leave its FIFO full with no interrupt to follow. An app
+    that never reads stdin therefore wedges it: the laptop's writes block and
+    Ctrl-C never arrives, so tools/mpr.py cannot reach the REPL. Polling stdin
+    here keeps the path clear. Harmless on the devkit's UART console.
+    """
+    import select
+
+    poller = select.poll()
+    poller.register(sys.stdin, select.POLLIN)
+    while True:
+        while poller.poll(0):
+            sys.stdin.read(1)
+        await asyncio.sleep(0.1)
+
+
+def make_status(tracker, store, wifi):
+    """The board's "alive" indicator: GPIO2 LED (devkit) or the screen (AtomS3R)."""
+    from hal.heartbeat import Heartbeat
+
+    if board.STATUS == "display":
+        try:
+            from machine import I2C, Pin
+
+            from hal.status_display import StatusDisplay
+
+            sda, scl = board.I2C_BUSES[0]
+
+            def info():
+                return {
+                    "name": store["ble"]["name"],
+                    "mode": tracker.mode,
+                    "intent": tracker.intent,
+                    "ip": wifi.ip(),
+                    "rssi": wifi.rssi(),
+                    "az": tracker.az.position_deg(),
+                    "el": tracker.el.position_deg(),
+                    "sun": tracker._sun,
+                    "reason": tracker.latch.reason if tracker.latch else None,
+                }
+
+            return StatusDisplay(board.PROFILE["display"], I2C(0, sda=Pin(sda), scl=Pin(scl)),
+                                 monotonic, info)
+        except Exception as exc:  # noqa: BLE001 - no screen is no reason not to run
+            log.error(f"status display failed: {exc}")
+            return _NoStatus(monotonic)
+    return Heartbeat(board.STATUS_LED, monotonic)
+
+
+class _NoStatus:
+    """Heartbeat-shaped nothing, when the screen fails."""
+
+    def __init__(self, monotonic):
+        self.last_cycle = monotonic()
+
+    def beat(self):
+        pass
+
+    async def run(self, is_latched, is_provisioning):
+        while True:
+            await asyncio.sleep(3600)
+
+
 async def main(tracker, store):
     from ble.provisioning import Provisioner
-    from hal.heartbeat import Heartbeat
     from net.api import Api
+    from net.discovery import DiscoveryResponder
     from net.httpd import HttpServer
     from net.timesync import TimeSync
     from net.wifi import Wifi
@@ -144,12 +212,13 @@ async def main(tracker, store):
     timesync = TimeSync(tracker.clock, wifi)
     provisioner = Provisioner(store, wifi, timesync, tracker)
     ble_manager = BleManager(provisioner, wifi)
-    heartbeat = Heartbeat(board.STATUS_LED, monotonic)
+    heartbeat = make_status(tracker, store, wifi)
     _on_exit.append(provisioner.stop)
     _on_exit.append(lambda: wifi.sta.active(False))
     api = Api(tracker, store, wifi, uptime=monotonic, timesync=timesync)
     server = HttpServer(api, port=80)
     await server.start()
+    discovery = DiscoveryResponder(api.describe)
 
     await asyncio.gather(
         control_loop(tracker, store["tracker"]["period_s"], heartbeat, server),
@@ -159,6 +228,8 @@ async def main(tracker, store):
         timesync.run(),
         provisioner.run(),
         ble_manager.run(),
+        discovery.run(),
+        drain_console(),
     )
 
 
@@ -166,8 +237,8 @@ def run():
     store = ConfigStore.load()
     tracker = build(store)
     log.configure(store["log"]["level"], clock=tracker.clock.now)
-    log.info("{} starting ({})".format(
-        store["ble"]["name"], "SIMULATED" if store["sim"] else "hardware"))
+    log.info("{} starting ({}); last reset: {}".format(
+        store["ble"]["name"], "SIMULATED" if store["sim"] else "hardware", reset_cause()))
     try:
         asyncio.run(main(tracker, store))
     finally:

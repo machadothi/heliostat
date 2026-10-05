@@ -20,6 +20,10 @@ import argparse
 import datetime
 import subprocess
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from port import default_port  # noqa: E402
 
 BOARD_SCRIPT = r"""
 import asyncio, gc
@@ -89,7 +93,7 @@ def main():
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter
     )
-    parser.add_argument("--port", default="/dev/ttyUSB0")
+    parser.add_argument("--port", default=default_port())
     parser.add_argument("--lat", type=float, default=51.4779)
     parser.add_argument("--lon", type=float, default=-0.0015)
     parser.add_argument("--target-az", type=float, default=180.0)

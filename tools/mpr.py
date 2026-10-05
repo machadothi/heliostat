@@ -15,8 +15,10 @@ the watchdog fires ("PRO CPU has been reset by WDT"); after that mpremote cannot
 get in until someone presses the reset button.
 
 So instead:
-  1. HARD-reset the board over the USB-serial control lines (releasing DTR
-     before RTS pulses the auto-reset circuit's EN low -- measured on this board);
+  1. HARD-reset the board over the USB-serial control lines: RTS pulsed with
+     DTR released, as esptool does. That pulls EN low through the devkit's
+     auto-reset circuit, and resets the AtomS3R's chip through its built-in
+     USB-Serial-JTAG;
   2. send Ctrl-C through the 1 s grace window in main.py, so the app, and
      Bluetooth, never start;
   3. hand over to mpremote with `resume`, which skips its soft reset.
@@ -28,22 +30,41 @@ import time
 
 import serial
 
-PORT = "/dev/ttyUSB0"
+sys.path.insert(0, __import__("os").path.dirname(__file__))
+from port import default_port  # noqa: E402
+
+PORT = default_port()
 PROMPT = b">>> "
 
 
-def hard_reset_to_repl(port=PORT, timeout=6.0):
-    """Reset the board and interrupt main.py. Returns True once a REPL prompt is seen."""
+def _open_and_reset(port, timeout=0.05):
+    """Open the port and hard-reset the board. Returns the open port."""
     s = serial.Serial()
-    s.port, s.baudrate, s.timeout = port, 115200, 0.05
-    s.dtr = False  # releasing DTR before RTS is what pulses EN low: a hard reset
+    s.port, s.baudrate, s.timeout = port, 115200, timeout
+    # Never let a write block forever: a board that is not reading its console
+    # used to hang this tool (and every mpremote after it).
+    s.write_timeout = 0.2
+    s.dtr = False
     s.rts = False
     s.open()
+    s.reset_output_buffer()  # drop anything a killed earlier session left queued
+    s.rts = True  # esptool's hard reset: EN low...
+    time.sleep(0.1)
+    s.rts = False  # ...and released
+    return s
+
+
+def hard_reset_to_repl(port=PORT, timeout=8.0):
+    """Reset the board and interrupt main.py. Returns True once a REPL prompt is seen."""
+    s = _open_and_reset(port)
     try:
         seen, reset_seen = b"", False
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            s.write(b"\x03")  # harmless at the REPL; interrupts main.py's grace window
+            try:
+                s.write(b"\x03")  # harmless at the REPL; interrupts main.py's grace window
+            except serial.SerialTimeoutException:
+                pass  # the board is not reading yet (still booting)
             seen += s.read(512)
             if not reset_seen and b"rst:" in seen:
                 # Only trust a prompt printed AFTER this reset's boot banner.
@@ -57,12 +78,7 @@ def hard_reset_to_repl(port=PORT, timeout=6.0):
 
 def reset_into_app(port=PORT):
     """Hard-reset and let main.py start the app (and Bluetooth) as it would at power-up."""
-    s = serial.Serial()
-    s.port, s.baudrate = port, 115200
-    s.dtr = False
-    s.rts = False
-    s.open()
-    s.close()
+    _open_and_reset(port).close()
 
 
 def main(argv):

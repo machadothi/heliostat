@@ -44,6 +44,29 @@ pytest
 python3 tools/deploy.py               # build MicroPython with the firmware frozen in, flash it
 ```
 
+## Two controller boards, one firmware
+
+| Board | Notes |
+|---|---|
+| **ESP32 devkit** (`esp32_devkit`) | no PSRAM; CP2102 on /dev/ttyUSB0; status LED on GPIO2; MPU6050 on external I2C |
+| **M5Stack AtomS3R** (`atoms3r`) | ESP32-S3, 8 MB PSRAM (8 MB free for Python); native USB on /dev/ttyACM0; status on its screen; BMI270 IMU + BMM150 magnetometer onboard |
+
+Build settings live in `boards/<name>.json` (see `boards/README.md`), pins in
+`firmware/hal/profiles.py`. `tools/deploy.py` picks the board that is plugged in
+(or `--board <name>`) and freezes its name into the build, which selects the pin
+profile at runtime. A new AtomS3R needs `--first-flash` once (full image; erases
+M5's stock firmware), then copy its `config.json` over with `tools/mpr.py`.
+Every tool finds the port through `tools/port.py` (`HELIOSTAT_PORT` /
+`HELIOSTAT_BOARD` override).
+
+The AtomS3R's console is the chip's USB-Serial-JTAG, which only takes input
+while something reads stdin: `app.drain_console` and `main.py`'s grace window do
+that, so `tools/mpr.py` can always break in.
+
+`tools/calibrate_azimuth.py` (AtomS3R only) finds true north for the yaw axis
+with the magnetometer: tape the Atom flat on the mirror, run it, and it sweeps
+the yaw and the tilt and fits both (`tools/azimuth_fit.py`).
+
 ## Deploying: the firmware is frozen into MicroPython
 
 `tools/deploy.py` builds MicroPython v1.24.1 (ESP-IDF v5.2.2, both in `~/esp`)
@@ -52,7 +75,7 @@ application partition, and leaves `main.py`, `boot.py` and `config.json` on the
 board's filesystem (`config.json` is backed up to `build/` first). A rebuild
 after a change takes about a minute.
 
-Why: this ESP32 has no PSRAM. Loaded from the filesystem -- even as `.mpy` --
+Why, on the devkit: this ESP32 has no PSRAM. Loaded from the filesystem -- even as `.mpy` --
 the firmware's code occupied ~88 KB of the Python heap. Under steady HTTP polling
 an allocation then failed, and MicroPython's split heap grew by taking the
 ESP-IDF heap's largest free block, all of it (the ESP32 port keeps no reserve).
@@ -88,7 +111,8 @@ runs `mpremote ... resume`, which skips the soft reset.
 
 ## Recovering a bricked board
 
-Hold **BOOT** while resetting. `firmware/main.py` skips the application and
+Hold the board's button while resetting (BOOT on the devkit, the screen on the
+AtomS3R). `firmware/main.py` skips the application and
 drops to the REPL.
 
 ## Safety
@@ -101,8 +125,8 @@ beam path during calibration. See the safety section of `docs/calibration.md`.
 
 | | |
 |---|---|
-| Controller | ESP32, MicroPython 1.24.1 |
-| Azimuth | Waveshare ST3020, id 1, 0–4095 over 360°, absolute encoder |
-| Elevation | Waveshare SC09, id 2, 0–1023 over 300° |
-| Bus | UART2 (GPIO17 TX / GPIO16 RX) at 1 Mbps through a half-duplex adapter |
-| Sensors | MPU6050 (0x68) tilt, BMP180 (0x77) pressure — both on 3V3, never 5 V |
+| Controller | ESP32 devkit or M5Stack AtomS3R, MicroPython 1.24.1 |
+| Yaw (azimuth) | Waveshare ST3020, id 2, 0–4095 over 360°, absolute encoder |
+| Tilt (elevation) | Waveshare ST3020, id 1 |
+| Bus | 1 Mbps half-duplex through a Waveshare bus-servo adapter: devkit UART2 TX 17 / RX 16, AtomS3R UART1 on its Grove socket, TX G1 (white) / RX G2 (yellow) |
+| Sensors | devkit: MPU6050 (0x68) on 3V3, never 5 V; AtomS3R: onboard BMI270 + BMM150. BMP180 (0x77) optional on either |

@@ -131,6 +131,45 @@ def test_config_never_leaks_the_wifi_password(tmp_path):
     assert "hunter2" not in json.dumps(body)
 
 
+def test_a_stow_pose_outside_the_axis_limits_is_refused(tmp_path):
+    """Stow is the safe place; one the frame cannot reach would stall a servo."""
+    api, tracker, _ = _api(tmp_path)
+    status, body = call(api, "POST", "/api/config", {"safety": {"stow": {"el_mech_deg": -120.0}}})
+    assert status == 400 and "stow" in body["error"]
+    assert tracker.cfg["safety"]["stow"]["el_mech_deg"] != -120.0
+
+
+def test_an_axis_offset_change_applies_without_a_restart(tmp_path):
+    api, tracker, store = _api(tmp_path)
+    axes = [dict(a) for a in store["axes"]]
+    before = tracker.az.axis.offset_deg
+    axes[0]["offset_deg"] = before + 4.0
+    status, body = call(api, "POST", "/api/config", {"axes": axes})
+    assert status == 200 and body["restart_required"] is False
+    assert tracker.az.axis.offset_deg == before + 4.0
+
+
+def test_a_servo_id_change_asks_for_a_restart(tmp_path):
+    api, tracker, store = _api(tmp_path)
+    axes = [dict(a) for a in store["axes"]]
+    axes[0]["servo_id"], axes[1]["servo_id"] = axes[1]["servo_id"], axes[0]["servo_id"]
+    status, body = call(api, "POST", "/api/config", {"axes": axes})
+    assert status == 200 and body["restart_required"] is True
+
+
+def test_imu_readings_are_averaged_and_report_a_missing_magnetometer(tmp_path):
+    api, tracker, _ = _api(tmp_path)
+    status, body = call(api, "GET", "/api/imu", query={"n": "3"})
+    assert status == 200
+    assert body["samples"] == 3
+    assert body["accel_g"][2] == pytest.approx(1.0)
+    assert body["mag_ut"] is None  # the simulated machine has no magnetometer
+
+    tracker.sensors.imu = None
+    status, body = call(api, "GET", "/api/imu")
+    assert status == 409
+
+
 def test_wifi_cannot_be_set_over_http(tmp_path):
     api, _, _ = _api(tmp_path)
     status, body = call(api, "POST", "/api/config", {"wifi": {"ssid": "x"}})

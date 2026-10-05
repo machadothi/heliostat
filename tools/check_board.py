@@ -15,12 +15,16 @@ the solar math must be written:
     every conversion must go through one constant in one place.
 
 Usage:
-    python3 tools/check_board.py [--port /dev/ttyUSB0]
+    python3 tools/check_board.py [--port PORT]
 """
 
 import argparse
 import subprocess
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from port import default_port  # noqa: E402
 
 # Seconds between 1970-01-01 and 2000-01-01.
 UNIX_TO_2000 = 946_684_800
@@ -81,7 +85,7 @@ def run_probe(port: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--port", default="/dev/ttyUSB0")
+    parser.add_argument("--port", default=default_port())
     args = parser.parse_args()
 
     output = run_probe(args.port)

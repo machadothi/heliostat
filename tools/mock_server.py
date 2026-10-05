@@ -28,6 +28,7 @@ from control.clock import Clock  # noqa: E402
 from control.tracker import Tracker  # noqa: E402
 from hal import board  # noqa: E402
 from net.api import Api  # noqa: E402
+from net.discovery import DISCOVERY_PORT, DiscoveryResponder  # noqa: E402
 from net.httpd import HttpServer  # noqa: E402
 from util import log  # noqa: E402
 
@@ -35,7 +36,7 @@ CONFIG = REPO / "tools" / "mock_config.json"
 GREENWICH = {"lat": 51.4779, "lon": -0.0015}
 
 
-def build(rate):
+def build(rate, port):
     store = ConfigStore.load(str(CONFIG))
     store.data["sim"] = True
     if store.data["site"]["lat"] == 0.0 and store.data["site"]["lon"] == 0.0:
@@ -45,7 +46,7 @@ def build(rate):
     az, el = board.make_axes(store.data, time.monotonic)
     sensors = board.make_sensors(store.data, time.monotonic, (az, el))
     tracker = Tracker(store.data, az, el, clock, time.monotonic, sensors)
-    api = Api(tracker, store, uptime=lambda: time.monotonic() - started)
+    api = Api(tracker, store, uptime=lambda: time.monotonic() - started, http_port=port)
     return tracker, api
 
 
@@ -56,12 +57,13 @@ async def control_loop(tracker):
 
 
 async def main(args):
-    tracker, api = build(args.rate)
+    tracker, api = build(args.rate, args.port)
     server = HttpServer(api, host=args.host, port=args.port)
     await server.start()
     print(f"mock heliostat on http://{args.host}:{args.port}  (sim clock x{args.rate})")
     print(f"  curl http://localhost:{args.port}/api/status")
-    await control_loop(tracker)
+    print(f"  the app can find it: UDP discovery on port {DISCOVERY_PORT}")
+    await asyncio.gather(control_loop(tracker), DiscoveryResponder(api.describe).run())
 
 
 if __name__ == "__main__":

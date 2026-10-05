@@ -1,0 +1,9 @@
+{
+  "description": "Plain ESP32 devkit (no PSRAM), CP2102 USB-serial, wired to a Waveshare bus-servo adapter",
+  "profile": "esp32_devkit",
+  "micropython_board": "ESP32_GENERIC",
+  "chip": "esp32",
+  "usb_match": ["CP210", "Silicon_Labs"],
+  "app_offset": "0x10000",
+  "full_image_offset": "0x1000"
+}

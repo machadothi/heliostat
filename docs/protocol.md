@@ -10,6 +10,8 @@ Setup has two stages:
 1. **BLE**: hand the ESP32 the credentials of the phone's own WiFi network, and
    optionally the time and location.
 2. **HTTP over the home network**: everything else, once the board has joined.
+   The app finds boards on the network by **UDP discovery** (section 3), so BLE
+   is needed only once per board.
 
 ---
 
@@ -263,3 +265,48 @@ above the horizon.
 `POST /api/mode {"mode": "estop"}` is a **software** E-stop: it latches, releases
 torque, and is cleared with `/api/clear`. The physical E-stop also cuts servo power
 in hardware.
+
+---
+
+## 3. Discovery (UDP)
+
+How the app finds heliostats already on the network: no BLE, no typed address,
+and it keeps working after DHCP moves a board to a new IP. `firmware/net/discovery.py`.
+
+Every heliostat listens on **UDP port 47474**. Send it this probe (ASCII, the
+version after the space):
+
+```
+HELIOSTAT_DISCOVER 1
+48 45 4C 49 4F 53 54 41 54 5F 44 49 53 43 4F 56 45 52 20 31
+```
+
+Each heliostat that hears it replies to the sender's address and port with one
+JSON datagram:
+
+```json
+{"service": "heliostat", "protocol": 1, "id": "84cca85ed290",
+ "name": "my_heliostat", "fw": "0.1.0", "port": 80, "mode": "idle"}
+```
+
+| Field | Meaning |
+|---|---|
+| `id` | 12 hex digits from the ESP32's factory MAC. Stable: remember a heliostat by this, not by its IP or name |
+| `name` | the configured name (`ble.name`), for display |
+| `port` | its HTTP API port (80 on a board; the mock server's own port otherwise) |
+| `mode` | current mode, for the picker |
+
+The HTTP API is then at the reply's **source address** on `port`.
+`GET /api/status` reports the same `id` under `device`, so a client can confirm
+that a saved address still belongs to the heliostat it remembers.
+
+Send the probe to the subnet broadcast address (and 255.255.255.255). Some access
+points filter broadcasts between WiFi clients; to cover those, also send it
+unicast to each address in the subnet -- a /24 is 254 datagrams of 20 bytes.
+Probes that are not `HELIOSTAT_DISCOVER` are ignored.
+
+```bash
+# from a laptop on the same network
+printf 'HELIOSTAT_DISCOVER 1' | socat - UDP-DATAGRAM:192.168.50.255:47474,broadcast
+```
+

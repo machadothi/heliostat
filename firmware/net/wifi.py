@@ -125,6 +125,15 @@ class Wifi:
                 network.hostname(self.store["wifi"]["hostname"])
             except Exception:  # noqa: BLE001 - older builds lack network.hostname
                 pass
+            # No modem sleep. By default the radio dozes between the router's
+            # beacons: every exchange waits ~100 ms for the next one, and on a
+            # weak link TCP retransmits stretched requests past the phone's 5 s
+            # timeout (seen: ping 60-170 ms, /api/status 3.6 s). The board runs
+            # on mains next to servos drawing amps; the ~100 mA saved is nothing.
+            try:
+                self.sta.config(pm=self.sta.PM_NONE)
+            except Exception:  # noqa: BLE001 - builds without power management
+                pass
             if self.sta.isconnected():
                 self.sta.disconnect()
             log.info(f"wifi: connecting to {ssid!r} (password {len(psk)} chars)")

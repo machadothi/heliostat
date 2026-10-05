@@ -54,6 +54,10 @@ class SimAxis(AxisDriver):
         self._servo_true = self.axis.to_servo_deg(mech_deg)
         self._servo_cmd = self._servo_true
 
+    def push_by_hand(self, mech_deg):
+        """Move a released joint by hand: the servo's stored goal is NOT changed."""
+        self._servo_true = self.axis.to_servo_deg(mech_deg)
+
     # -- AxisDriver hooks -------------------------------------------------------
 
     async def _command(self, servo_deg, speed_dps):
@@ -100,8 +104,9 @@ class SimAxis(AxisDriver):
         self.state["load"] = _override(self.faults["load"], 0)
 
     def _set_torque(self, on):
-        if not on:
-            # Released: the joint stays wherever it is.
+        # Like the hardware: a release keeps the stored goal (the joint just stops
+        # being driven), and the real driver sets goal := present on enable.
+        if on:
             self._servo_cmd = self._servo_true
 
     # -- internals --------------------------------------------------------------

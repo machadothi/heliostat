@@ -54,15 +54,17 @@ DEFAULTS = {
         {
             "name": "el",
             "servo_id": 2,
-            "family": "SCS",
-            # Centres mechanical -90..+90 on the SC09's 0..300 encoder (60..240).
+            # A second ST3020: the SC09 was too weak to tilt a mirror. (An SC09
+            # still works here: family "SCS", offset 150 for its 0..300 encoder.)
+            "family": "STS",
+            # Centres mechanical -90..+90 on the ST3020's 0..360 encoder (90..270).
             # With 0 here, half the travel would map to angles the encoder lacks.
-            "offset_deg": 150.0,
+            "offset_deg": 180.0,
             "direction": 1,
             "gear_ratio": 1.0,
             "min_deg": -90.0,
             "max_deg": 90.0,
-            "backlash_deg": 1.0,
+            "backlash_deg": 0.3,
             "max_speed_dps": 30.0,
             "home_mech_deg": -90.0,
             "home_dir": -1,
@@ -84,7 +86,7 @@ DEFAULTS = {
         "servo": {
             "max_temp_c": 65,
             # Supply window per servo family, as reported by each servo. Set to
-            # match the driver board in use (bench: ST3020 12.3 V, SC09 9.9 V);
+            # match the driver board in use (bench: ST3020 12.3 V; SC09 9.9 V);
             # the point is to catch a sagging or failing rail.
             "volt_limits": {"STS": [6.0, 13.0], "SCS": [6.0, 13.0]},
             "max_load": 800,
@@ -192,6 +194,16 @@ def validate(data):
         raise ConfigError("a point target cannot sit at the mirror's pivot")
 
     safety = data["safety"]
+    # Stow is where the machine goes when anything is wrong, so it must be a pose
+    # the frame can actually reach. (Found on the mounted structure: a face-down
+    # stow the frame could not reach drove the tilt servo into it and stalled it.)
+    for axis, key in zip(axes, ("az_mech_deg", "el_mech_deg")):
+        stow = safety["stow"][key]
+        if not axis["min_deg"] <= stow <= axis["max_deg"]:
+            raise ConfigError(
+                "safety.stow.{} = {} is outside axis {}'s limits [{}, {}]".format(
+                    key, stow, axis["name"], axis["min_deg"], axis["max_deg"])
+            )
     if safety["min_sun_elev_deg"] < 0.0:
         raise ConfigError("safety.min_sun_elev_deg must not be negative")
     if safety["defocus_offset_deg"] <= 0.0:

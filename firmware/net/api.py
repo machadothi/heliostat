@@ -14,14 +14,17 @@ Errors are JSON too, always {"error": "..."}, so the app has one shape to parse:
     500  a bug
 """
 
+import asyncio
 import gc
 import json
 
 from config import ConfigError
 from control import modes
+from control.kinematics import Axis
 from control.tracker import CommandRejected
 from solar.sunpos import sun_position
-from util.mem import idf_heap
+from util.identity import device_id
+from util.mem import idf_heap, reset_cause
 from version import FW_VERSION, PROTOCOL_VERSION
 
 
@@ -35,9 +38,10 @@ class ApiError(Exception):
 class Api:
     """Binds the routes to one tracker, config store and (optionally) WiFi manager."""
 
-    def __init__(self, tracker, store, wifi=None, uptime=None, timesync=None):
+    def __init__(self, tracker, store, wifi=None, uptime=None, timesync=None, http_port=80):
         self.tracker = tracker
         self.store = store
+        self.http_port = http_port
         self.wifi = wifi
         self.timesync = timesync
         self._uptime = uptime
@@ -57,6 +61,7 @@ class Api:
             ("POST", "/api/clear"): self.post_clear,
             ("POST", "/api/wifi/forget"): self.post_wifi_forget,
             ("POST", "/api/imu/level"): self.post_imu_level,
+            ("GET", "/api/imu"): self.get_imu,
         }
 
     async def handle(self, method, path, query, body):
@@ -84,6 +89,18 @@ class Api:
         except Exception as exc:  # noqa: BLE001 - a handler bug must not kill the server
             return 500, {"error": f"internal error: {exc}"}
 
+    def describe(self):
+        """Who and where this heliostat is: the reply to a network discovery probe."""
+        return {
+            "service": "heliostat",
+            "protocol": PROTOCOL_VERSION,
+            "id": device_id(),
+            "name": self.store["ble"]["name"],
+            "fw": FW_VERSION,
+            "port": self.http_port,
+            "mode": self.tracker.mode,
+        }
+
     # -- reads ------------------------------------------------------------------
 
     def get_status(self, query, payload):
@@ -92,11 +109,13 @@ class Api:
         status["device"] = {
             "fw": FW_VERSION,
             "protocol": PROTOCOL_VERSION,
+            "id": device_id(),
             "name": self.store["ble"]["name"],
             "sim": self.store["sim"],
             "mem_free": gc.mem_free() if hasattr(gc, "mem_free") else None,
             "uptime_s": self._uptime() if self._uptime else None,
             "idf_heap": idf_heap(),
+            "reset_cause": reset_cause(),
         }
         status["wifi"] = self.wifi.status() if self.wifi else None
         status["time_sync"] = self.timesync.status() if self.timesync else None
@@ -161,11 +180,13 @@ class Api:
             raise ApiError(400, "WiFi credentials are set over BLE provisioning only")
         self.store.update(payload)
         self.store.save()
-        self._refresh_tracker_config()
-        return {"ok": True}
+        restart = self._refresh_tracker_config()
+        return {"ok": True, "restart_required": restart}
 
     def post_time(self, query, payload):
-        epoch = float(_require(payload, "epoch"))
+        # Whole seconds as an int: float(1.79e9) on the board is single
+        # precision and lands on a 128 s grid (see control/clock.py).
+        epoch = int(_require(payload, "epoch"))
         if epoch < 1.6e9:  # before September 2020: certainly not a real clock
             raise ApiError(400, f"epoch {epoch} is not a plausible Unix time")
         if self.timesync is not None:
@@ -239,6 +260,37 @@ class Api:
             self.wifi.schedule_reboot()
         return {"ok": True, "rebooting": self.wifi is not None}
 
+    async def get_imu(self, query, payload):
+        """Averaged raw IMU readings, for calibration tools: ?n=samples (1-100).
+
+        Sensor frames, no remapping: accel in g from the IMU, field in microtesla
+        from the magnetometer (null without one). Samples are spaced to the
+        magnetometer's 30 Hz output, yielding between them so the control loop
+        keeps its 1 s cycle while this runs.
+        """
+        imu, mag = self.tracker.sensors.imu, self.tracker.sensors.mag
+        if imu is None:
+            raise ApiError(409, "no IMU fitted")
+        n = max(1, min(100, int(query.get("n", "20"))))
+        acc, field, good = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], 0
+        for _ in range(n):
+            a = imu.accel()
+            for i in range(3):
+                acc[i] += a[i] / n
+            if mag is not None:
+                m = mag.read_ut()
+                if m is not None:
+                    good += 1
+                    for i in range(3):
+                        field[i] += m[i]
+            await asyncio.sleep_ms(35) if hasattr(asyncio, "sleep_ms") else await asyncio.sleep(0.035)
+        return {
+            "samples": n,
+            "accel_g": acc,
+            "mag_ut": [v / good for v in field] if good else None,
+            "mag_samples": good,
+        }
+
     def post_imu_level(self, query, payload):
         """Adopt the base's current attitude as level. Do this once, after install."""
         imu = self.tracker.sensors.imu
@@ -253,10 +305,29 @@ class Api:
     # -- internals ----------------------------------------------------------------
 
     def _refresh_tracker_config(self):
-        # The tracker holds a reference to the config dict; store.update() swaps
-        # in a new one, so point the tracker (and its supervisor) at it.
+        """Point the running tracker at the new config. True if a restart is needed.
+
+        The tracker holds a reference to the config dict; store.update() swaps
+        in a new one, so point the tracker (and its supervisor) at it. Axis
+        calibration (offset, direction, limits, speeds) applies live: each
+        driver gets a fresh Axis model. A different servo ID or family needs a
+        new bus driver, which only a restart builds.
+        """
         self.tracker.cfg = self.store.data
         self.tracker.supervisor.cfg = self.store.data["safety"]
+        restart = False
+        for driver, axis_cfg in zip((self.tracker.az, self.tracker.el), self.store.data["axes"]):
+            old = driver.axis
+            if axis_cfg["servo_id"] != old.servo_id or axis_cfg["family"] != old.family:
+                restart = True
+                continue
+            driver.axis = Axis(**axis_cfg)
+            driver.state["name"] = driver.axis.name
+            # Targets held in the old angle frame mean nothing in the new one.
+            driver._leg_deg = driver._final_deg = driver._previous_final_deg = None
+            driver.state["target_deg"] = None
+        self.tracker._last_cmd = [None, None]
+        return restart
 
 
 def _decode(body):

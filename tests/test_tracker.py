@@ -314,6 +314,51 @@ def test_a_failing_control_loop_latches_a_fault():
         rig.tracker.request_mode(modes.TRACK)
 
 
+def test_the_servos_hold_where_they_are_at_boot():
+    """Their torque state survives a board reset; the tracker makes it match IDLE."""
+    rig = Rig()
+    assert rig.az.torque_on and rig.el.torque_on
+    before = rig.el.true_mech_deg()
+    rig.run(3)
+    assert rig.el.true_mech_deg() == pytest.approx(before, abs=0.1)
+
+
+def test_clearing_a_fault_does_not_resume_the_move_that_caused_it():
+    """Found on the mounted structure: a stow into a pose the frame could not
+    reach stalled the servo and latched a fault. The servo keeps its goal through
+    the torque release, so clearing the fault drove it straight back into the
+    frame. Re-enabling torque must hold the joint where it now is."""
+    rig = Rig()
+    rig.el.teleport(40.0)
+    rig.tracker.request_mode(modes.STOW)  # el -90: far away, takes seconds
+    rig.run(1)
+    assert rig.el.moving
+    rig.tracker.software_fault("el: load 1000 over limit")
+    assert not rig.el.torque_on
+
+    rig.el.push_by_hand(25.0)  # someone frees the mirror while it is released
+    rig.run(2)
+    rig.tracker.clear_fault()
+    rig.run(10)
+    assert rig.mode == modes.IDLE
+    assert rig.el.true_mech_deg() == pytest.approx(25.0, abs=0.2)
+
+
+def test_a_jog_after_a_fault_starts_from_where_the_joint_is():
+    rig = Rig()
+    rig.el.teleport(40.0)
+    rig.tracker.request_mode(modes.STOW)
+    rig.run(1)
+    rig.tracker.software_fault("stalled")
+    rig.el.push_by_hand(25.0)
+    rig.run(1)
+    rig.tracker.clear_fault()
+    rig.tracker.request_mode(modes.MANUAL)
+    rig.run(1)
+    target = asyncio.run(rig.tracker.jog(1, delta_deg=5.0))
+    assert target == pytest.approx(30.0, abs=0.2)  # not -85: the stale stow goal + 5
+
+
 # --- E-stop -------------------------------------------------------------------
 
 

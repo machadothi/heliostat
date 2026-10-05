@@ -19,7 +19,7 @@ The maths lives in plain functions so it runs under pytest; only IMU talks to
 the I2C bus, and even that is handed a bus rather than creating one.
 """
 
-import math
+from hal.attitude import GravityLevel, magnitude, tilt_between  # noqa: F401 (re-exported)
 
 ADDRESS = 0x68
 
@@ -46,20 +46,7 @@ def accel_from_bytes(data):
     return tuple(to_signed16(data[i], data[i + 1]) / _LSB_PER_G for i in (0, 2, 4))
 
 
-def magnitude(v):
-    return math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
-
-
-def tilt_between(reference, current):
-    """Angle in degrees between two gravity vectors. 0 means unchanged attitude."""
-    ref_len, cur_len = magnitude(reference), magnitude(current)
-    if ref_len < 1e-6 or cur_len < 1e-6:
-        return 0.0
-    dot = sum(r * c for r, c in zip(reference, current)) / (ref_len * cur_len)
-    return math.degrees(math.acos(max(-1.0, min(1.0, dot))))
-
-
-class IMU:
+class IMU(GravityLevel):
     def __init__(self, i2c, level=None, address=ADDRESS):
         self.i2c = i2c
         self.address = address
@@ -67,31 +54,11 @@ class IMU:
         self._write(_PWR_MGMT_1, 0x00)  # wake from sleep, internal oscillator
         self._write(_CONFIG, _DLPF_5HZ)
         self._write(_ACCEL_CONFIG, 0x00)  # +/-2 g
-        self.calibrated = level is not None
-        self.reference = tuple(level) if level else self.average(20)
+        self._init_reference(level)
 
     def accel(self):
         """(x, y, z) in g."""
         return accel_from_bytes(self._read(_ACCEL_XOUT_H, 6))
-
-    def average(self, samples=50):
-        """Mean gravity vector over a burst of readings: for calibrating level."""
-        sx = sy = sz = 0.0
-        for _ in range(samples):
-            x, y, z = self.accel()
-            sx, sy, sz = sx + x, sy + y, sz + z
-        return (sx / samples, sy / samples, sz / samples)
-
-    def read(self):
-        """(tilt_deg, accel_g): the pair the tracker's supervisor consumes."""
-        a = self.accel()
-        return tilt_between(self.reference, a), magnitude(a)
-
-    def calibrate_level(self):
-        """Adopt the current attitude as level. Returns the vector, for config."""
-        self.reference = self.average(100)
-        self.calibrated = True
-        return self.reference
 
     def _read(self, register, n):
         return self.i2c.readfrom_mem(self.address, register, n)

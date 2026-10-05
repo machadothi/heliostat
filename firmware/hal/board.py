@@ -6,29 +6,32 @@ same interface either way. Flip `sim` in config.json and the identical control
 code runs against pure-Python stand-ins, which is how the whole system is
 exercised with no mechanics attached.
 
-Pin choices avoid the ESP32 strapping pins (0, 2, 12, 15) for anything that
-could hold them at the wrong level during boot, and avoid GPIO34-39, which are
-input-only with NO internal pull-ups. See docs/wiring.md.
+The pins come from the board profile (hal/profiles.py): the same firmware runs
+on the ESP32 devkit and on the M5Stack AtomS3R.
 """
 
 from control.kinematics import Axis
 from control.tracker import Sensors
 
-# --- pin map ------------------------------------------------------------------
-SERVO_UART = 2
-SERVO_TX = 17
-SERVO_RX = 16
+from hal import profiles
+
+# --- pin map, from the board profile ------------------------------------------
+PROFILE = profiles.current()
+
+SERVO_UART = PROFILE["servo_uart"]
+SERVO_TX = PROFILE["servo_tx"]
+SERVO_RX = PROFILE["servo_rx"]
 SERVO_BAUD = 1_000_000
 
-I2C_SDA = 21
-I2C_SCL = 22
+I2C_BUSES = PROFILE["i2c"]  # ((sda, scl), ...), probed in order
 
-LIMIT_AZ = 32
-LIMIT_EL = 33
-ESTOP_SENSE = 25
-ANEMOMETER = 27
-STATUS_LED = 2
-PROVISION_BUTTON = 0  # the BOOT button; also the safe-mode button in main.py
+LIMIT_AZ = PROFILE["limit_az"]
+LIMIT_EL = PROFILE["limit_el"]
+ESTOP_SENSE = PROFILE["estop"]
+ANEMOMETER = PROFILE["anemometer"]
+STATUS = PROFILE["status"]  # "led" or "display"
+STATUS_LED = PROFILE["status_led"]
+PROVISION_BUTTON = PROFILE["button"]  # also the safe-mode button in main.py
 
 # How far past a soft limit the simulated limit switch sits. On the real machine
 # the switch is mounted just beyond the end of normal travel, so routine moves

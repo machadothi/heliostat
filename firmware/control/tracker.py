@@ -69,8 +69,9 @@ DEFOCUS_SETTLE_TIMEOUT_S = 5.0
 class Sensors:
     """Whatever sensors are fitted. Every one is optional."""
 
-    def __init__(self, imu=None, baro=None, wind=None, estop=None, limits=()):
+    def __init__(self, imu=None, baro=None, wind=None, estop=None, limits=(), mag=None):
         self.imu = imu
+        self.mag = mag  # calibration only (GET /api/imu); no safety rule reads it
         self.baro = baro
         self.wind = wind
         self.estop = estop
@@ -97,6 +98,11 @@ class Tracker:
 
         self.mode = modes.IDLE
         self.intent = modes.IDLE
+        # The servos keep their torque state across a board reset (their power
+        # is separate). Make it match IDLE now -- holding where they are --
+        # rather than whatever the last run left behind.
+        self.az.torque(modes.wants_torque(self.mode))
+        self.el.torque(modes.wants_torque(self.mode))
         self.latch = None  # the Trip that latched us into safety, if any
         self.trips = []
         self.governing = None

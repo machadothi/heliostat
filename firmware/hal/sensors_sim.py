@@ -15,6 +15,13 @@ class SimIMU:
     def read(self):
         return self.tilt_deg, self.accel_g
 
+    def accel(self):
+        """The gravity vector: tilted about X by tilt_deg, scaled to accel_g."""
+        import math
+
+        t = math.radians(self.tilt_deg)
+        return (0.0, self.accel_g * math.sin(t), self.accel_g * math.cos(t))
+
 
 class SimBaro:
     """BMP180 stand-in, with an optional pressure ramp to simulate a front."""

@@ -46,48 +46,89 @@ class _NormallyClosedInput:
         return self.triggered()
 
 
-def make_i2c():
+def make_buses():
+    """[(name, I2C, addresses present)] for every bus in the board profile."""
     from machine import I2C, Pin
 
-    return I2C(0, sda=Pin(board.I2C_SDA), scl=Pin(board.I2C_SCL), freq=100_000)
+    buses = []
+    for index, (sda, scl) in enumerate(board.I2C_BUSES):
+        name = "i2c{} (sda {}, scl {})".format(index, sda, scl)
+        try:
+            bus = I2C(index, sda=Pin(sda), scl=Pin(scl), freq=100_000)
+            buses.append((name, bus, bus.scan()))
+        except Exception as exc:  # noqa: BLE001
+            log.error(f"{name} unavailable: {exc}")
+    return buses
+
+
+IMU_ADDRESS = 0x68  # both the MPU6050 and the BMI270 answer here
+
+
+def identify_imu(bus):
+    """'bmi270', 'mpu6050' or None -- by chip-ID register, since both sit at 0x68."""
+    try:
+        if bus.readfrom_mem(IMU_ADDRESS, 0x00, 1)[0] == 0x24:  # BMI270 CHIP_ID
+            return "bmi270"
+        if bus.readfrom_mem(IMU_ADDRESS, 0x75, 1)[0] in (0x68, 0x70, 0x72):  # MPU WHO_AM_I
+            return "mpu6050"
+    except OSError:
+        pass
+    return None
+
+
+def make_imu(bus, kind, level):
+    """(imu, magnetometer or None) for an identified chip."""
+    if kind == "bmi270":
+        from hal.imu_bmi270 import IMU
+
+        imu = IMU(bus, level=level)
+        mag = None
+        try:
+            from hal.mag_bmm150 import Magnetometer
+
+            mag = Magnetometer(imu)
+        except Exception as exc:  # noqa: BLE001 - the IMU is still useful without it
+            log.warning(f"no BMM150 behind the BMI270: {exc}")
+        return imu, mag
+    from hal.imu_mpu6050 import IMU
+
+    return IMU(bus, level=level), None
 
 
 def make_real_sensors(cfg):
     hardware = cfg.get("hardware", {})
-    imu = baro = None
+    imu = baro = mag = None
+    buses = make_buses()
+    level = cfg.get("imu", {}).get("level")
 
-    try:
-        i2c = make_i2c()
-        present = i2c.scan()
-    except Exception as exc:  # noqa: BLE001
-        log.error(f"I2C bus unavailable: {exc}")
-        i2c, present = None, []
-
-    from hal.imu_mpu6050 import ADDRESS as IMU_ADDRESS
-
-    if i2c is not None and IMU_ADDRESS in present:
+    for name, bus, present in buses:
+        if imu is not None or IMU_ADDRESS not in present:
+            continue
+        kind = identify_imu(bus)
+        if kind is None:
+            continue
         try:
-            from hal.imu_mpu6050 import IMU
-
-            imu = IMU(i2c, level=cfg.get("imu", {}).get("level"))
+            imu, mag = make_imu(bus, kind, level)
             note = "" if imu.calibrated else "; level not calibrated, using boot attitude"
-            log.info(f"MPU6050 found (WHO_AM_I 0x{imu.who_am_i:02X}){note}")
+            extra = " + BMM150" if mag is not None else ""
+            log.info(f"{kind.upper()}{extra} found on {name}{note}")
         except Exception as exc:  # noqa: BLE001
-            log.error(f"MPU6050 present but failed: {exc}")
-    else:
-        log.warning("no MPU6050 on I2C: tilt and shock rules inactive")
+            log.error(f"{kind.upper()} on {name} failed: {exc}")
+    if imu is None:
+        log.warning("no IMU on I2C: tilt and shock rules inactive")
 
     from hal.baro_bmp180 import ADDRESS as BARO_ADDRESS
 
-    if i2c is not None and BARO_ADDRESS in present:
-        try:
-            from hal.baro_bmp180 import Barometer
+    for name, bus, present in buses:
+        if baro is None and BARO_ADDRESS in present:
+            try:
+                from hal.baro_bmp180 import Barometer
 
-            baro = Barometer(i2c)
-            log.info("BMP180 found")
-        except Exception as exc:  # noqa: BLE001
-            log.error(f"barometer at 0x77 failed: {exc}")
-    else:
+                baro = Barometer(bus)
+                log.info(f"BMP180 found on {name}")
+            except Exception as exc:  # noqa: BLE001
+                log.error(f"barometer at 0x77 on {name} failed: {exc}")
+    if baro is None:
         log.warning("no BMP180 on I2C: standard atmosphere for refraction, no storm proxy")
 
     limits = ()
@@ -103,4 +144,4 @@ def make_real_sensors(cfg):
     else:
         log.warning("E-stop input disabled in config (hardware.estop)")
 
-    return Sensors(imu=imu, baro=baro, estop=estop, limits=limits)
+    return Sensors(imu=imu, baro=baro, estop=estop, limits=limits, mag=mag)

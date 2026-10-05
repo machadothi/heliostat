@@ -8,7 +8,8 @@ Subclasses implement three hooks:
 
     async _command(servo_deg, speed_dps)   send a position to the servo
     async _refresh()                        read state back into self.state
-    _set_torque(on)                         enable or release the motor
+    _set_torque(on)                         enable the motor HOLDING ITS PRESENT
+                                            position, or release it
 
 The public surface is identical for both, which is the whole point:
 control/tracker.py receives one of these by constructor injection and never
@@ -83,6 +84,19 @@ class AxisDriver:
         self.state["moving"] = True
 
     def torque(self, on):
+        """Enable or release the motor. Either way, any unfinished move is dropped.
+
+        A servo keeps its last goal in a register through a torque release, and
+        drives straight to it the moment torque returns. Found on the mounted
+        structure: a stow into a pose the frame cannot reach stalled the servo
+        and latched a fault; clearing the fault re-enabled torque and the servo
+        went back into the frame. So enabling torque HOLDS WHERE THE JOINT IS
+        (the _set_torque hook does that), and nothing pending is replayed.
+        """
+        self._leg_deg = None
+        self._final_deg = None
+        self._previous_final_deg = None
+        self.state["target_deg"] = None
         self.torque_on = bool(on)
         self._set_torque(self.torque_on)
 

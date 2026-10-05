@@ -14,7 +14,7 @@ from control.kinematics import FAMILY_DEGREES, FAMILY_STEPS
 
 from hal import board
 from hal.axis_base import AxisDriver
-from hal.scservo import REG_PRESENT_POSITION, SCSBus, ServoError, STSBus
+from hal.scservo import REG_GOAL_POSITION, REG_PRESENT_POSITION, SCSBus, ServoError, STSBus
 
 _BLOCK_START = REG_PRESENT_POSITION  # 56
 _BLOCK_LEN = 11  # 56..66 inclusive
@@ -70,6 +70,11 @@ class ServoAxis(AxisDriver):
 
     def _set_torque(self, on):
         try:
+            if on:
+                # Goal := present first, so torque returning holds the joint where
+                # it is instead of resuming whatever was commanded before.
+                present = self.bus.read_word(self.sid, REG_PRESENT_POSITION)
+                self.bus.write_word(self.sid, REG_GOAL_POSITION, present)
             self.bus.torque(self.sid, on)
         except ServoError:
             self._missed()

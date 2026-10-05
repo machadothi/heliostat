@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 """Deploy the firmware to the board.
 
-    python3 tools/deploy.py            # build MicroPython with the firmware frozen in, flash it
-    python3 tools/deploy.py --mpy      # quick: copy precompiled .mpy files instead
-    python3 tools/deploy.py --dry-run  # build/compile only
+    python3 tools/deploy.py                    # build MicroPython with the firmware frozen in, flash it
+    python3 tools/deploy.py --board atoms3r    # pick the board (default: the one plugged in)
+    python3 tools/deploy.py --first-flash      # full image: once per new board, ERASES its files
+    python3 tools/deploy.py --mpy              # quick: copy precompiled .mpy files instead
+    python3 tools/deploy.py --dry-run          # build/compile only
+
+Boards are described in boards/<name>.json (see boards/README.md): the
+MicroPython board to build, the chip, the USB device to look for. The build
+freezes a one-line `board_id` module naming the board, which selects its pin
+profile in firmware/hal/profiles.py.
 
 Why frozen (the default): this ESP32 has no PSRAM, and the Python heap shares
 RAM with the WiFi driver. Loaded from the filesystem, even as .mpy, the firmware's
@@ -37,9 +44,8 @@ OUT = REPO / "build" / "mpy"
 ESP = Path(os.environ.get("ESP_DIR", Path.home() / "esp"))
 IDF = ESP / "esp-idf"
 MICROPYTHON = ESP / "micropython"
-FW_BUILD = REPO / "build" / "esp32"
-PORT = "/dev/ttyUSB0"
-MPR = [sys.executable, str(REPO / "tools" / "mpr.py")]
+sys.path.insert(0, str(REPO / "tools"))
+from port import PortError, boards, resolve  # noqa: E402
 PACKAGES = ("hal", "solar", "control", "net", "ble", "util")
 KEEP_AS_SOURCE = {"main.py", "boot.py"}
 
@@ -89,9 +95,13 @@ def compile_all():
     print(f"compiled {count} modules to .mpy ({size // 1024} KB)")
 
 
-def deploy_mpy():
+def mpr(port):
+    return [sys.executable, str(REPO / "tools" / "mpr.py"), "--port", port]
+
+
+def deploy_mpy(port):
     roots = [p.name for p in sorted(OUT.iterdir()) if p.is_file()]
-    args = MPR + ["exec", CLEAN.format(packages=PACKAGES),
+    args = mpr(port) + ["exec", CLEAN.format(packages=PACKAGES),
                   "+", "fs", "cp", "-r", *PACKAGES, ":",
                   "+", "fs", "cp", *roots, ":"]
     result = subprocess.run(args, cwd=OUT)
@@ -100,48 +110,91 @@ def deploy_mpy():
     print("deployed; the board has restarted into the app")
 
 
-def build_firmware():
+def build_dir(board):
+    return REPO / "build" / board
+
+
+def build_firmware(board, cfg):
     if not (IDF / "export.sh").exists() or not (MICROPYTHON / "ports" / "esp32").exists():
         sys.exit(f"need ESP-IDF v5.2.2 in {IDF} and MicroPython v1.24.1 in {MICROPYTHON}")
-    port = MICROPYTHON / "ports" / "esp32"
+    out = build_dir(board)
+    out.mkdir(parents=True, exist_ok=True)
+    # The board's identity, frozen in: selects its pin profile at runtime.
+    (out / "board_id.py").write_text(f'BOARD = "{cfg["profile"]}"\n')
+    (out / "manifest.py").write_text(
+        f'include("{REPO / "tools" / "manifest.py"}")\n'
+        f'module("board_id.py", base_path="{out}")\n'
+    )
+    if "micropython_board_dir" in cfg:
+        target = f"BOARD_DIR={REPO / 'boards' / cfg['micropython_board_dir']}"
+    else:
+        target = f"BOARD={cfg['micropython_board']}"
+    port_dir = MICROPYTHON / "ports" / "esp32"
     script = (
         f"source {IDF}/export.sh >/dev/null"
         f" && make -s -C {MICROPYTHON}/mpy-cross -j{os.cpu_count()}"
-        f" && make -C {port} BOARD=ESP32_GENERIC BUILD={FW_BUILD}"
-        f" FROZEN_MANIFEST={REPO}/tools/manifest.py -j{os.cpu_count()}"
+        f" && make -C {port_dir} {target} BUILD={out}"
+        f" FROZEN_MANIFEST={out / 'manifest.py'} -j{os.cpu_count()}"
     )
     result = subprocess.run(["bash", "-c", script], stdout=subprocess.DEVNULL)
     if result.returncode != 0:
         sys.exit("firmware build failed (rerun without output suppressed to see why)")
-    size = (FW_BUILD / "micropython.bin").stat().st_size
-    print(f"built firmware with the heliostat frozen in ({size // 1024} KB)")
+    size = (out / "micropython.bin").stat().st_size
+    print(f"built {board} firmware with the heliostat frozen in ({size // 1024} KB)")
 
 
-def deploy_frozen():
-    backup = REPO / "build" / "config.backup.json"
-    if subprocess.run(MPR + ["--stay", "fs", "cp", ":config.json", str(backup)]).returncode == 0:
+def deploy_frozen(board, cfg, port, first_flash=False):
+    out = build_dir(board)
+    backup = REPO / "build" / f"config.backup.{board}.json"
+    if not first_flash and subprocess.run(
+            mpr(port) + ["--stay", "fs", "cp", ":config.json", str(backup)]).returncode == 0:
         print(f"config.json backed up to {backup.relative_to(REPO)}")
-    # Only the application partition: the bootloader and partition table are
-    # stock, and the filesystem (config.json) lives in its own partition.
-    flash = [sys.executable, "-m", "esptool", "--chip", "esp32", "-p", PORT, "-b", "460800",
-             "write_flash", "0x10000", str(FW_BUILD / "micropython.bin")]
+    if first_flash:
+        # Bootloader + partition table + app: replaces whatever the board shipped
+        # with. Erasing first also wipes its filesystem.
+        image, offset = out / "firmware.bin", cfg["full_image_offset"]
+        erase = [sys.executable, "-m", "esptool", "--chip", cfg["chip"], "-p", port, "erase_flash"]
+        if subprocess.run(erase, stdout=subprocess.DEVNULL).returncode != 0:
+            sys.exit("erasing failed")
+    else:
+        # Only the application partition: the filesystem (config.json) is untouched.
+        image, offset = out / "micropython.bin", cfg["app_offset"]
+    flash = [sys.executable, "-m", "esptool", "--chip", cfg["chip"], "-p", port, "-b", "460800",
+             "write_flash", "-z", offset, str(image)]
     if subprocess.run(flash, stdout=subprocess.DEVNULL).returncode != 0:
         sys.exit("flashing failed")
-    print("flashed")
-    args = MPR + ["exec", CLEAN.format(packages=PACKAGES),
-                  "+", "fs", "cp", str(SRC / "main.py"), str(SRC / "boot.py"), ":"]
+    print(f"flashed {board} on {port}")
+    args = mpr(port) + ["exec", CLEAN.format(packages=PACKAGES),
+                        "+", "fs", "cp", str(SRC / "main.py"), str(SRC / "boot.py"), ":"]
     if subprocess.run(args).returncode != 0:
         sys.exit("cleaning the board failed")
     print("deployed; the board has restarted into the app")
 
 
-if __name__ == "__main__":
-    dry = "--dry-run" in sys.argv
-    if "--mpy" in sys.argv:
+def main(argv):
+    dry = "--dry-run" in argv
+    board = None
+    if "--board" in argv:
+        board = argv[argv.index("--board") + 1]
+    known = boards()
+    if dry and board:
+        port = None
+    else:
+        try:
+            board, port = resolve(board)
+        except PortError as exc:
+            if not (dry and board is None):
+                sys.exit(str(exc))
+            sys.exit(f"{exc}; for a dry run name the board: --board {'|'.join(known)}")
+    if "--mpy" in argv:
         compile_all()
         if not dry:
-            deploy_mpy()
-    else:
-        build_firmware()
-        if not dry:
-            deploy_frozen()
+            deploy_mpy(port)
+        return
+    build_firmware(board, known[board])
+    if not dry:
+        deploy_frozen(board, known[board], port, first_flash="--first-flash" in argv)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
