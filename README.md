@@ -37,12 +37,41 @@ tracking brain runs under pytest on a laptop.
 
 ## Getting started
 
+One script prepares everything on Linux (Debian/Ubuntu), and can be run again at
+any time to check or repair the setup:
+
 ```bash
-pip install -e '.[dev]'
-python3 tools/check_board.py          # run this FIRST on a new board
-pytest
-python3 tools/deploy.py               # build MicroPython with the firmware frozen in, flash it
+tools/setup_env.sh --test        # Python env + ESP-IDF + MicroPython, then run the tests
+source .venv/bin/activate
+python3 tools/check_board.py     # run this FIRST on a new board
+python3 tools/deploy.py          # build MicroPython with the firmware frozen in, flash it
 ```
+
+`tools/setup_env.sh --check` only reports what is missing, `--python-only` skips the
+firmware toolchain, and `--apt` installs missing system packages with sudo.
+
+What it sets up:
+
+| Piece | Version | Where | Used for |
+|---|---|---|---|
+| Python packages | pinned in `pyproject.toml` | `.venv/` | tests, deploy, bench tools (below) |
+| ESP-IDF | v5.2.2 | `~/esp/esp-idf`, toolchains in `~/.espressif` | building the firmware |
+| MicroPython | v1.24.1 + submodules berkeley-db, micropython-lib, tinyusb | `~/esp/micropython` | the firmware's runtime |
+| Serial access | the `dialout` group | | /dev/ttyUSB0, /dev/ttyACM0 |
+
+The Python dependencies, all declared in `pyproject.toml` (`pip install -e '.[dev]'`
+installs the lot):
+
+| Extra | Packages | For |
+|---|---|---|
+| `test` | pytest, numpy | `pytest` |
+| `board` | mpremote 1.24.1, pyserial, esptool 4.x, mpy-cross 1.24.1 | `deploy.py`, `mpr.py`, `servo_id.py`, `check_board.py` |
+| `tools` | numpy, pygeomag, Pillow, bleak | `calibrate_azimuth.py`, `preview_display.py`, `provision.py` |
+| `reference` | pvlib, pandas, numpy | only to regenerate `tools/reference/noaa_cases.json` |
+
+The versions of ESP-IDF and MicroPython are set at the top of
+`tools/setup_env.sh`; mpremote and mpy-cross in `pyproject.toml` must match the
+MicroPython version.
 
 ## Two controller boards, one firmware
 

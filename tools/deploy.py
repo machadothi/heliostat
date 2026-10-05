@@ -127,7 +127,8 @@ def build_dir(board):
 
 def build_firmware(board, cfg):
     if not (IDF / "export.sh").exists() or not (MICROPYTHON / "ports" / "esp32").exists():
-        sys.exit(f"need ESP-IDF v5.2.2 in {IDF} and MicroPython v1.24.1 in {MICROPYTHON}")
+        sys.exit(f"need ESP-IDF v5.2.2 in {IDF} and MicroPython v1.24.1 in {MICROPYTHON}: "
+                 "run tools/setup_env.sh")
     out = build_dir(board)
     out.mkdir(parents=True, exist_ok=True)
     # The board's identity and the build time, frozen in: the profile selects

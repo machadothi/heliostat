@@ -1,21 +1,57 @@
+# Host-side Python for the heliostat: tests, deploy and bench tools. The firmware
+# itself needs nothing beyond MicroPython. Install everything with
+#     tools/setup_env.sh          (also fetches ESP-IDF + MicroPython; see README)
+# or, for the Python part only:
+#     python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "heliostat"
 version = "0.1.0"
 description = "Sun-tracking heliostat firmware for ESP32 / MicroPython"
 requires-python = ">=3.10"
 
-# Host-side only. The firmware itself has no dependencies beyond MicroPython.
 [project.optional-dependencies]
-dev = [
+# pytest: the whole suite (tests/). numpy: float32 and calibration-maths tests.
+test = [
     "pytest>=8.0",
-    "mpremote>=1.24",
+    "numpy>=1.26",
 ]
-# Needed only to regenerate tools/reference/noaa_cases.json, which is committed.
+# Talking to and flashing the board (tools/deploy.py, mpr.py, servo_id.py, ...).
+# mpremote and mpy-cross are pinned to the board's MicroPython (1.24.1; mpy
+# bytecode v6.3): the combination every board operation was tested with.
+# esptool 5 renamed its commands; deploy.py uses the 4.x names.
+board = [
+    "mpremote==1.24.1",
+    "pyserial>=3.5",
+    "esptool>=4.7,<5",
+    "mpy-cross==1.24.1.post3",
+]
+# Bench tools: calibrate_azimuth.py (pygeomag: magnetic declination from the
+# World Magnetic Model; numpy: the fit), preview_display.py (Pillow),
+# provision.py (bleak: BLE set-up from the laptop).
+tools = [
+    "numpy>=1.26",
+    "pygeomag>=1.1",
+    "Pillow>=9.0",
+    "bleak>=0.22",
+]
+# Everything for day-to-day work.
+dev = ["heliostat[test,board,tools]"]
+# Only to regenerate tools/reference/noaa_cases.json, which is committed.
 reference = [
     "pvlib>=0.11",
     "pandas>=2.0",
     "numpy>=1.26",
 ]
+
+# Not an installable library: the install only brings in the dependencies above.
+[tool.setuptools]
+packages = []
+py-modules = []
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
