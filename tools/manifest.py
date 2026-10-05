@@ -16,5 +16,7 @@ FIRMWARE = "../firmware"
 for name in ("hal", "solar", "control", "net", "ble", "util"):
     package(name, base_path=FIRMWARE)
 
-for name in ("app", "config", "version"):
+# startup.py is the boot logic main.py imports: frozen, so updates over WiFi
+# bring it too.
+for name in ("app", "config", "version", "startup"):
     module(name + ".py", base_path=FIRMWARE)

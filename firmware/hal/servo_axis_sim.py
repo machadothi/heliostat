@@ -41,7 +41,9 @@ class SimAxis(AxisDriver):
         self._last_t = monotonic()
 
         # Set any of these to force a fault on the next refresh.
-        self.faults = {"no_reply": False, "temp_c": None, "volts": None, "load": None}
+        # sag_deg: a load the servo holds short of its goal, in servo degrees --
+        # the tilt axis under the mirror's weight sat ~0.9 deg low on the bench.
+        self.faults = {"no_reply": False, "temp_c": None, "volts": None, "load": None, "sag_deg": 0.0}
 
     # -- test hooks -------------------------------------------------------------
 
@@ -86,10 +88,11 @@ class SimAxis(AxisDriver):
             speed = self.axis.max_speed_dps * self.axis.gear_ratio
             if self._speed_limit:
                 speed = min(speed, self._speed_limit * self.axis.gear_ratio)
-            error = self._servo_cmd - self._servo_true
+            goal = self._servo_cmd - self.faults["sag_deg"]
+            error = goal - self._servo_true
             travel = speed * dt
             if abs(error) <= travel:
-                self._servo_true = self._servo_cmd
+                self._servo_true = goal
             else:
                 self._servo_true += travel if error > 0 else -travel
 
@@ -98,7 +101,8 @@ class SimAxis(AxisDriver):
             reading += self._noise() * self._step
 
         self.state["position_deg"] = self.axis.from_servo_deg(reading)
-        self.state["moving"] = abs(self._servo_cmd - self._servo_true) > 0.5 * self._step
+        goal = self._servo_cmd - self.faults["sag_deg"]
+        self.state["moving"] = self.torque_on and abs(goal - self._servo_true) > 0.5 * self._step
         self.state["volts"] = _override(self.faults["volts"], NOMINAL_VOLTS[self.axis.family])
         self.state["temp_c"] = _override(self.faults["temp_c"], 25)
         self.state["load"] = _override(self.faults["load"], 0)

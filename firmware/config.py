@@ -27,6 +27,9 @@ DEFAULTS = {
     # The ESP32 joins the phone's own network; BLE only hands over the credentials.
     "wifi": {"ssid": "", "psk": "", "hostname": "heliostat"},
     "ble": {"name": "my_heliostat"},
+    # Firmware updates over WiFi need this token (set over USB by tools/deploy.py).
+    # Empty: OTA is off.
+    "ota": {"token": ""},
     # Normally-closed inputs: with nothing wired they read as OPEN, which would
     # fault the machine instantly. Enable each only once it is actually wired.
     "hardware": {"limit_switches": False, "estop": False},

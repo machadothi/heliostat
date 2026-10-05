@@ -20,8 +20,11 @@ import json
 MAX_BODY = 4096
 MAX_HEADER_LINES = 40
 READ_TIMEOUT_S = 5
+# A streamed upload (a firmware image) may take a minute on weak WiFi; instead
+# of one deadline for the whole body, each chunk must arrive within this.
+STREAM_CHUNK_TIMEOUT_S = 15
 
-_REASONS = {200: "OK", 400: "Bad Request", 404: "Not Found", 405: "Method Not Allowed",
+_REASONS = {200: "OK", 400: "Bad Request", 403: "Forbidden", 404: "Not Found", 405: "Method Not Allowed",
             409: "Conflict", 413: "Payload Too Large", 500: "Internal Server Error"}
 
 
@@ -43,6 +46,13 @@ class HttpServer:
         self.port = port
         self.requests = 0
         self._server = None
+        self._streams = {}
+
+    def add_stream(self, method, path, handler):
+        """Route a request whose body is too big to buffer (> MAX_BODY) to
+        `await handler(reader, length, headers) -> (status, dict)`, which reads
+        the body itself. Headers arrive lower-cased."""
+        self._streams[(method, path)] = handler
 
     async def start(self):
         self._server = await asyncio.start_server(self._serve, self.host, self.port)
@@ -51,9 +61,18 @@ class HttpServer:
     async def _serve(self, reader, writer):
         status, payload = 500, {"error": "internal error"}
         try:
-            status, payload = await asyncio.wait_for(
-                self._read_and_dispatch(reader), READ_TIMEOUT_S
-            )
+            head = await asyncio.wait_for(self._read_head(reader), READ_TIMEOUT_S)
+            if len(head) == 2:  # (status, error payload)
+                status, payload = head
+            else:
+                method, path, query, length, headers = head
+                stream = self._streams.get((method, path))
+                if stream is not None:
+                    status, payload = await stream(_TimedReader(reader), length, headers)
+                else:
+                    status, payload = await asyncio.wait_for(
+                        self._dispatch(reader, method, path, query, length), READ_TIMEOUT_S
+                    )
         except asyncio.TimeoutError:
             status, payload = 400, {"error": "request timed out"}
         except Exception as exc:  # noqa: BLE001
@@ -70,7 +89,8 @@ class HttpServer:
                 pass
         self.requests += 1
 
-    async def _read_and_dispatch(self, reader):
+    async def _read_head(self, reader):
+        """(method, path, query, length, headers), or (status, error) if malformed."""
         request_line = (await reader.readline()).decode().strip()
         if not request_line:
             return 400, {"error": "empty request"}
@@ -79,21 +99,22 @@ class HttpServer:
             return 400, {"error": "bad request line"}
         method, target, _ = parts
 
-        length = 0
+        headers = {}
         for _ in range(MAX_HEADER_LINES):
             line = (await reader.readline()).decode().strip()
             if not line:
                 break
             name, _, value = line.partition(":")
-            if name.strip().lower() == "content-length":
-                length = int(value.strip())
+            headers[name.strip().lower()] = value.strip()
+        length = int(headers.get("content-length", "0"))
+        path, query = parse_target(target)
+        return method.upper(), path, query, length, headers
 
+    async def _dispatch(self, reader, method, path, query, length):
         if length > MAX_BODY:
             return 413, {"error": f"body larger than {MAX_BODY} bytes"}
         body = (await reader.readexactly(length)).decode() if length else ""
-
-        path, query = parse_target(target)
-        return await self.api.handle(method.upper(), path, query, body)
+        return await self.api.handle(method, path, query, body)
 
     async def _respond(self, writer, status, payload):
         body = json.dumps(payload).encode()
@@ -106,3 +127,13 @@ class HttpServer:
         writer.write(head.encode())
         writer.write(body)
         await writer.drain()
+
+
+class _TimedReader:
+    """The request stream, with a deadline per read rather than per request."""
+
+    def __init__(self, reader):
+        self._reader = reader
+
+    async def readexactly(self, n):
+        return await asyncio.wait_for(self._reader.readexactly(n), STREAM_CHUNK_TIMEOUT_S)

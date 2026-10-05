@@ -3,7 +3,14 @@
   "profile": "atoms3r",
   "micropython_board_dir": "atoms3r/micropython",
   "chip": "esp32s3",
-  "usb_match": ["Espressif_USB_JTAG"],
+  "usb_match": [
+    "Espressif_USB_JTAG"
+  ],
   "app_offset": "0x10000",
-  "full_image_offset": "0x0"
+  "full_image_offset": "0x0",
+  "ota": true,
+  "otadata": [
+    "0xd000",
+    "0x2000"
+  ]
 }

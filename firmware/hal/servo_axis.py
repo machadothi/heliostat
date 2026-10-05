@@ -26,6 +26,28 @@ _BUS_TIMEOUT_MS = 10
 
 _ACCELERATION = 50  # STS only; the SCS family has no acceleration register
 
+# Registers worth seeing over the API (GET /api/servo): (name, address, bytes).
+# Addresses are the same on both families except where noted.
+REGISTERS = (
+    ("model", 3, 2), ("id", 5, 1), ("min_angle", 9, 2), ("max_angle", 11, 2),
+    ("max_temp", 13, 1), ("max_volt", 14, 1), ("min_volt", 15, 1), ("max_torque", 16, 2),
+    ("p_gain", 21, 1), ("d_gain", 22, 1), ("i_gain", 23, 1),
+    ("cw_dead", 26, 1), ("ccw_dead", 27, 1),
+    ("torque_enable", 40, 1), ("goal", 42, 2),
+    ("position", 56, 2), ("load", 60, 2), ("volts", 62, 1), ("temp", 63, 1), ("moving", 66, 1),
+)
+STS_ONLY = (("offset", 31, 2), ("mode", 33, 1), ("acceleration", 41, 1),
+            ("torque_limit", 48, 2), ("current", 69, 2))
+
+# What POST /api/servo may change: (address, lowest, highest). EEPROM, so the
+# write is unlocked, made and locked again. The dead zones are how far a servo
+# lets its position be off before it corrects at all: the tracker's 1-step
+# moves were ignored until ~4 steps had built up.
+TUNABLE = {
+    "p_gain": (21, 1, 254), "d_gain": (22, 0, 254), "i_gain": (23, 0, 254),
+    "cw_dead": (26, 0, 32), "ccw_dead": (27, 0, 32),
+}
+
 
 class ServoAxis(AxisDriver):
     def __init__(self, axis, bus, max_missed=3):
@@ -78,6 +100,33 @@ class ServoAxis(AxisDriver):
             self.bus.torque(self.sid, on)
         except ServoError:
             self._missed()
+
+    # -- maintenance: registers over the API ------------------------------------
+
+    def registers(self):
+        """{name: value} read from the servo. Raises ServoError if it is silent."""
+        table = REGISTERS + (STS_ONLY if self._is_sts else ())
+        out = {}
+        for name, addr, size in table:
+            data = self.bus.read(self.sid, addr, size)
+            out[name] = data[0] if size == 1 else self.bus._unpack(data, 0)
+        return out
+
+    def tune(self, values):
+        """Write TUNABLE registers (validated), then return them as read back."""
+        for name, value in values.items():
+            if name not in TUNABLE:
+                raise ValueError("{} is not tunable (allowed: {})".format(name, ", ".join(TUNABLE)))
+            _, low, high = TUNABLE[name]
+            if not isinstance(value, int) or not low <= value <= high:
+                raise ValueError("{} must be an integer {}..{}".format(name, low, high))
+        self.bus.unlock_eeprom(self.sid)
+        try:
+            for name, value in values.items():
+                self.bus.write_byte(self.sid, TUNABLE[name][0], value)
+        finally:
+            self.bus.lock_eeprom(self.sid)
+        return {name: self.bus.read_byte(self.sid, TUNABLE[name][0]) for name in TUNABLE}
 
     def _missed(self):
         self.state["missed"] += 1

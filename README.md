@@ -63,6 +63,11 @@ The AtomS3R's console is the chip's USB-Serial-JTAG, which only takes input
 while something reads stdin: `app.drain_console` and `main.py`'s grace window do
 that, so `tools/mpr.py` can always break in.
 
+**Updates over WiFi (AtomS3R):** `python3 tools/deploy.py --ota`. After a one-time
+`--first-flash` over USB, firmware updates need no cable. A bad update rolls
+itself back. The full procedure, including doing it by hand with `curl` and
+recovering from problems, is in **[docs/ota.md](docs/ota.md)**.
+
 `tools/calibrate_azimuth.py` (AtomS3R only) finds true north for the yaw axis
 with the magnetometer: tape the Atom flat on the mirror, run it, and it sweeps
 the yaw and the tilt and fits both (`tools/azimuth_fit.py`).
@@ -108,6 +113,27 @@ watchdog fires; then only the reset button gets you back in. `tools/mpr.py`
 hard-resets the board over the USB-serial lines instead, catches `main.py`'s
 1-second grace window with Ctrl-C (so the app and Bluetooth never start), and
 runs `mpremote ... resume`, which skips the soft reset.
+
+## Servo tuning and the settle trim
+
+Both ST3020s run at the **factory settings: P 32, D 32, I 0, dead zone 1 step**.
+`GET /api/servo?axis=az|el` shows a servo's registers, and `POST /api/servo`
+changes the gains and dead zones (idle or manual only; see `docs/protocol.md`).
+
+Measured on the mounted frame (2026-10-05):
+
+- At P 32 the azimuth servo does not move until its command is ~4 steps
+  (0.35 deg) ahead, so tracking advances in ~0.3 deg jumps every couple of
+  minutes. The elevation servo, holding the mirror's weight, sat ~0.9 deg low,
+  which put the beam 1.8 deg low.
+- Raising P removes the jumps (P 64 moves on 1 step), but **P 64 starts to hunt and
+  P 96 shook the wooden frame nearly over**. Keep the factory gains on this frame,
+  and change gains only in small steps with someone watching it.
+
+The firmware compensates in software instead: once an axis has settled more than
+3 steps short of its target, it adds 70% of the error to the command (the
+"trim", capped at 3 deg, shown per axis as `trim_deg` in `/api/status`). On the
+frame it learned ~1 deg on the elevation axis by itself. See `hal/axis_base.py`.
 
 ## Recovering a bricked board
 

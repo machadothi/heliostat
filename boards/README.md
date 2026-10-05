@@ -22,10 +22,17 @@ Fields:
   `tools/deploy.py` to pick the board when only one is plugged in.
 - `app_offset`, `full_image_offset`: where the application and the full image
   (bootloader + partition table + app, `--first-flash`) go.
+- `otadata`: [offset, size] of the OTA slot-selection partition (OTA boards only).
+  A USB deploy clears it so the board boots the slot it just wrote.
+- `ota`: whether the build has two application slots, so `tools/deploy.py --ota`
+  can update it over WiFi. The devkit's 4 MB flash cannot hold two copies of
+  its 1.7 MB firmware; the AtomS3R's 8 MB holds two 2.5 MB slots
+  (`atoms3r/micropython/partitions-8MiB-ota.csv`).
 
-The AtomS3R definition differs from `ESP32_GENERIC_S3/SPIRAM_OCT` in one way: no
-TinyUSB, so the REPL runs on the chip's USB-Serial-JTAG. That keeps the DTR/RTS
-hard reset `tools/mpr.py` and esptool use working.
+The AtomS3R definition differs from `ESP32_GENERIC_S3/SPIRAM_OCT` in two ways: no
+TinyUSB, so the REPL runs on the chip's USB-Serial-JTAG (which keeps the DTR/RTS
+hard reset `tools/mpr.py` and esptool use working); and two OTA app slots
+instead of one factory app (see `docs/ota.md`).
 
 Adding a board: a JSON here, a profile in `firmware/hal/profiles.py`, and, if
 MicroPython has no suitable stock board, a definition directory like

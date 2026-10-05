@@ -18,6 +18,16 @@ learns which kind it has.
 
 from control.calibration import apply_backlash
 
+# Settle trim: a servo holding a load short of its goal (the tilt axis under the
+# mirror's weight sat ~0.9 deg low: a 1.8 deg beam error) is corrected by adding
+# most of the shortfall to its command. Only once it has been still for a few
+# reads, and only past a threshold wider than the servo's own position dead zone
+# (~4 steps measured on the ST3020) -- inside that the two would fight and hunt.
+TRIM_AFTER_READS = 3
+TRIM_THRESHOLD_STEPS = 3.0
+TRIM_GAIN = 0.7
+TRIM_MAX_DEG = 3.0
+
 
 class AxisDriver:
     def __init__(self, axis):
@@ -26,6 +36,8 @@ class AxisDriver:
         self._final_deg = None  # where the operator or tracker wants to end up
         self._leg_deg = None  # what is being commanded right now
         self._previous_final_deg = None
+        self._trim = 0.0  # added to every command: the learned settle error
+        self._still_reads = 0
         self.state = {
             "name": axis.name,
             "family": axis.family,
@@ -38,6 +50,7 @@ class AxisDriver:
             "load": None,
             "missed": 0,
             "ok": True,
+            "trim_deg": 0.0,
         }
 
     # -- commands -----------------------------------------------------------
@@ -64,7 +77,7 @@ class AxisDriver:
         return clamped
 
     async def update(self):
-        """Refresh state, and finish a backlash overshoot once it has arrived."""
+        """Refresh state, finish a backlash overshoot, and trim a settle error."""
         await self._refresh()
         if (
             self._leg_deg is not None
@@ -74,9 +87,32 @@ class AxisDriver:
         ):
             self._leg_deg = self._final_deg
             await self._send(self._final_deg, None)
+            return
+        await self._trim_settle_error()
+
+    async def _trim_settle_error(self):
+        position = self.state["position_deg"]
+        if (not self.torque_on or self._final_deg is None or position is None
+                or not self.settled or not self.state["ok"]):
+            self._still_reads = 0
+            return
+        self._still_reads += 1
+        if self._still_reads < TRIM_AFTER_READS:
+            return
+        error = self._final_deg - position
+        if abs(error) <= TRIM_THRESHOLD_STEPS * self.axis.deadband_deg:
+            return
+        trim = max(-TRIM_MAX_DEG, min(TRIM_MAX_DEG, self._trim + TRIM_GAIN * error))
+        if trim != self._trim:
+            self._trim = trim
+            self.state["trim_deg"] = trim
+            self._still_reads = 0
+            await self._send(self._final_deg, None)
 
     async def _send(self, mech_deg, speed_dps):
-        await self._command(self.axis.to_servo_deg(mech_deg), speed_dps)
+        # The trim moves the COMMAND only; limits are checked on what is sent.
+        commanded, _ = self.axis.clamp(mech_deg + self._trim)
+        await self._command(self.axis.to_servo_deg(commanded), speed_dps)
         # Until a refresh proves otherwise, a commanded axis is a MOVING axis.
         # Without this, `settled` reads the stale "stopped" from the refresh that
         # came before the command -- and reports a joint mid-backlash-return,

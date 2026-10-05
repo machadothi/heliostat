@@ -86,7 +86,7 @@ async def control_loop(tracker, period_s, heartbeat=None, server=None):
                 log.info("mem: {} bytes free; idf {}; http {}".format(
                     gc.mem_free(),
                     "{} free, {} largest".format(*idf) if idf else "n/a",
-                    server.requests if server else "n/a"))
+                    server.requests if server else "n/a"), keep=False)  # console only
             except Exception:  # noqa: BLE001
                 pass
         elapsed = monotonic() - started
@@ -130,6 +130,27 @@ class BleManager:
             elif not want and self.provisioner.active and not self.provisioner.connections:
                 self.provisioner.stop()
             await asyncio.sleep(0.25)
+
+
+async def confirm_firmware(tracker, wifi, cycles=20):
+    """Once this firmware is demonstrably healthy, cancel the OTA rollback.
+
+    Healthy: WiFi joined (so a fix could be sent the same way) and the control
+    loop completing cycles without a software fault. Until then a reset sends
+    the bootloader back to the previous firmware. Harmless on a USB-flashed
+    board, which is never pending.
+    """
+    from net import ota
+
+    seen = 0
+    while seen < cycles:
+        await asyncio.sleep(1)
+        healthy = wifi.connected() and not (tracker.latch and tracker.latch.rule == "software")
+        seen = seen + 1 if healthy else 0
+    was_pending = ota.pending()
+    ota.mark_valid()
+    if was_pending:
+        log.info("new firmware verified: rollback cancelled")
 
 
 async def drain_console():
@@ -217,6 +238,9 @@ async def main(tracker, store):
     _on_exit.append(lambda: wifi.sta.active(False))
     api = Api(tracker, store, wifi, uptime=monotonic, timesync=timesync)
     server = HttpServer(api, port=80)
+    from net.ota import Ota
+
+    server.add_stream("POST", "/api/ota", Ota(tracker, store, wifi.schedule_reboot).receive)
     await server.start()
     discovery = DiscoveryResponder(api.describe)
 
@@ -230,6 +254,7 @@ async def main(tracker, store):
         ble_manager.run(),
         discovery.run(),
         drain_console(),
+        confirm_firmware(tracker, wifi),
     )
 
 

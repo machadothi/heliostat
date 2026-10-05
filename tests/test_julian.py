@@ -156,3 +156,11 @@ def test_clock_hands_the_solar_math_an_exact_integer():
 
     # What the float path does on the board: snapped to a 128 s grid.
     assert np.float32(1_790_796_000 + 12.7) == np.float32(1_790_796_032)
+
+
+def test_log_timestamps_stay_exact_to_the_second():
+    """The log used to format its integer clock through a float: 128 s steps."""
+    from util import log
+
+    assert log.stamp(1_791_205_556) == "13:05:56Z"
+    assert log.stamp(1_791_205_557) == "13:05:57Z"

@@ -22,7 +22,10 @@ from config import ConfigError
 from control import modes
 from control.kinematics import Axis
 from control.tracker import CommandRejected
+from hal import profiles
+from net import ota
 from solar.sunpos import sun_position
+from util import log
 from util.identity import device_id
 from util.mem import idf_heap, reset_cause
 from version import FW_VERSION, PROTOCOL_VERSION
@@ -62,6 +65,8 @@ class Api:
             ("POST", "/api/wifi/forget"): self.post_wifi_forget,
             ("POST", "/api/imu/level"): self.post_imu_level,
             ("GET", "/api/imu"): self.get_imu,
+            ("GET", "/api/servo"): self.get_servo,
+            ("POST", "/api/servo"): self.post_servo,
         }
 
     async def handle(self, method, path, query, body):
@@ -97,6 +102,7 @@ class Api:
             "id": device_id(),
             "name": self.store["ble"]["name"],
             "fw": FW_VERSION,
+            "board": profiles.name(),
             "port": self.http_port,
             "mode": self.tracker.mode,
         }
@@ -116,6 +122,9 @@ class Api:
             "uptime_s": self._uptime() if self._uptime else None,
             "idf_heap": idf_heap(),
             "reset_cause": reset_cause(),
+            "board": profiles.name(),
+            "build": _build_id(),
+            "ota_pending": ota.pending(),
         }
         status["wifi"] = self.wifi.status() if self.wifi else None
         status["time_sync"] = self.timesync.status() if self.timesync else None
@@ -166,6 +175,8 @@ class Api:
         # Never hand the WiFi password back out.
         data = dict(self.store.data)
         data["wifi"] = dict(data["wifi"], psk="***" if data["wifi"]["psk"] else "")
+        ota = data.get("ota", {})
+        data["ota"] = dict(ota, token="***" if ota.get("token") else "")
         return data
 
     def get_log(self, query, payload):
@@ -291,6 +302,44 @@ class Api:
             "mag_samples": good,
         }
 
+    def _servo_driver(self, name):
+        drivers = {d.axis.name: d for d in (self.tracker.az, self.tracker.el)}
+        if name not in drivers:
+            raise ApiError(400, "axis must be one of: {}".format(", ".join(drivers)))
+        driver = drivers[name]
+        if not hasattr(driver, "registers"):
+            raise ApiError(409, "simulated servos have no registers")
+        return driver
+
+    def get_servo(self, query, payload):
+        """The servo's registers: GET /api/servo?axis=el"""
+        from hal.scservo import ServoError
+
+        driver = self._servo_driver(query.get("axis", ""))
+        try:
+            return {"axis": driver.axis.name, "id": driver.axis.servo_id, "registers": driver.registers()}
+        except ServoError as exc:
+            raise ApiError(409, str(exc)) from None
+
+    def post_servo(self, query, payload):
+        """Tune a servo: {"axis": "el", "set": {"cw_dead": 1, "ccw_dead": 1}}.
+
+        Only while nothing is driving the axes (idle, manual, fault, E-stop):
+        an EEPROM write mid-move is a bad moment to find out a value was wrong.
+        """
+        from hal.scservo import ServoError
+
+        if self.tracker.mode not in (modes.IDLE, modes.MANUAL, modes.FAULT, modes.ESTOP):
+            raise ApiError(409, "tune servos in idle or manual, not {}".format(self.tracker.mode))
+        driver = self._servo_driver(_require(payload, "axis"))
+        values = _require(payload, "set")
+        try:
+            tuned = driver.tune(values)
+        except ServoError as exc:
+            raise ApiError(409, str(exc)) from None
+        log.info("servo {} tuned: {}".format(driver.axis.name, values))
+        return {"ok": True, "axis": driver.axis.name, "tuning": tuned}
+
     def post_imu_level(self, query, payload):
         """Adopt the base's current attitude as level. Do this once, after install."""
         imu = self.tracker.sensors.imu
@@ -346,3 +395,13 @@ def _require(payload, key):
     if key not in payload:
         raise ApiError(400, f"missing field: {key}")
     return payload[key]
+
+
+def _build_id():
+    """When this firmware was built (frozen in by tools/deploy.py), or None."""
+    try:
+        from board_id import BUILD
+
+        return BUILD
+    except ImportError:
+        return None

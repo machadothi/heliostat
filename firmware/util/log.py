@@ -18,7 +18,7 @@ ERROR = 40
 _NAMES = {DEBUG: "DEBUG", INFO: "INFO", WARNING: "WARN", ERROR: "ERROR"}
 _LEVELS = {"debug": DEBUG, "info": INFO, "warning": WARNING, "error": ERROR}
 
-HISTORY_LINES = 20
+HISTORY_LINES = 40
 
 _level = INFO
 _history = RingBuffer(HISTORY_LINES)
@@ -36,17 +36,32 @@ def configure(level="info", clock=None):
     _clock = clock
 
 
-def log(level, message):
+def stamp(epoch):
+    """'13:05:42Z' from Unix seconds, in integer arithmetic.
+
+    Never through a float: on the ESP32 a float holds 1.8e9 only to 128 s, and
+    the log's timestamps used to advance in exactly those steps.
+    """
+    seconds = int(epoch) % 86400
+    return "{:02d}:{:02d}:{:02d}Z".format(seconds // 3600, seconds // 60 % 60, seconds % 60)
+
+
+def log(level, message, keep=True):
+    """Print a line; `keep=False` leaves it out of the history the API returns,
+    for routine lines (the memory report) that would push real events out."""
     if level < _level:
         return
-    stamp = ""
+    prefix = ""
     if _clock is not None:
         try:
-            stamp = f"{_clock():.0f} "
+            now = _clock()
+            if now is not None:
+                prefix = stamp(now) + " "
         except Exception:
-            stamp = ""
-    line = "{}{}: {}".format(stamp, _NAMES.get(level, "?"), message)
-    _history.append(line)
+            prefix = ""
+    line = "{}{}: {}".format(prefix, _NAMES.get(level, "?"), message)
+    if keep:
+        _history.append(line)
     print(line)
 
 
@@ -54,8 +69,8 @@ def debug(message):
     log(DEBUG, message)
 
 
-def info(message):
-    log(INFO, message)
+def info(message, keep=True):
+    log(INFO, message, keep)
 
 
 def warning(message):

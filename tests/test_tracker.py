@@ -359,6 +359,44 @@ def test_a_jog_after_a_fault_starts_from_where_the_joint_is():
     assert target == pytest.approx(30.0, abs=0.2)  # not -85: the stale stow goal + 5
 
 
+def test_a_sagging_axis_is_trimmed_onto_its_target():
+    """On the bench the tilt servo held the mirror ~0.9 deg low: 1.8 deg at the beam."""
+    rig = Rig()
+    rig.el.teleport(30.0)
+    rig.el.faults["sag_deg"] = 0.9
+    rig.tracker.request_mode(modes.MANUAL)
+    rig.run(1)
+    asyncio.run(rig.tracker.jog(1, abs_deg=40.0))
+    rig.run(3)
+    assert rig.el.true_mech_deg() == pytest.approx(39.1, abs=0.1)  # the sag, before trimming
+    rig.run(20)
+    step = rig.el.axis.deadband_deg
+    assert abs(rig.el.true_mech_deg() - 40.0) <= 3 * step
+    assert rig.el.state["trim_deg"] > 0.5
+
+
+def test_an_accurate_axis_is_left_alone():
+    rig = Rig()
+    rig.el.teleport(30.0)
+    rig.tracker.request_mode(modes.MANUAL)
+    rig.run(1)
+    asyncio.run(rig.tracker.jog(1, abs_deg=40.0))
+    rig.run(20)
+    assert rig.el.state["trim_deg"] == 0.0
+
+
+def test_the_trim_is_capped():
+    """A stalled or blocked joint must not be pushed ever harder."""
+    rig = Rig()
+    rig.el.teleport(30.0)
+    rig.el.faults["sag_deg"] = 10.0
+    rig.tracker.request_mode(modes.MANUAL)
+    rig.run(1)
+    asyncio.run(rig.tracker.jog(1, abs_deg=40.0))
+    rig.run(60)
+    assert rig.el.state["trim_deg"] == pytest.approx(3.0)
+
+
 # --- E-stop -------------------------------------------------------------------
 
 

@@ -246,12 +246,14 @@ above the horizon.
 
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| GET | `/api/status` | | everything: mode, intent, latch, sun, plan, beam, efficiency, axes, trips, allowed modes, device, wifi, time sync |
+| GET | `/api/status` | | everything: mode, intent, latch, sun, plan, beam, efficiency, axes (each with `trim_deg`, the learned settle correction), trips, allowed modes, device (`id`, `board`, `build`, `ota_pending`, memory, `reset_cause`), wifi, time sync |
 | GET | `/api/telemetry` | | the small subset for 2 Hz polling |
 | GET | `/api/sun?t=<unix>&lat=&lon=` | | sun position at any time, to validate the firmware's math |
 | GET | `/api/config` | | config (WiFi password masked) |
-| GET | `/api/log` | | recent log lines |
-| POST | `/api/config` | partial config | deep-merged, validated, saved. WiFi can't be set here |
+| GET | `/api/log` | | the last 40 log events, stamped `HH:MM:SSZ` (UTC). The minutely memory report goes to the console only |
+| GET | `/api/imu?n=20` | | averaged raw IMU readings (n = 1–100): `accel_g`, `mag_ut` (null without a magnetometer), sensor frames. 409 if no IMU |
+| GET | `/api/servo?axis=el` | | that axis's servo registers by name: limits, PID gains, dead zones, position, load, volts… 409 on simulated servos or a silent servo |
+| POST | `/api/config` | partial config | deep-merged, validated, saved. WiFi can't be set here. Axis calibration applies at once; a changed servo ID or family replies `"restart_required": true` |
 | POST | `/api/time` | `{"epoch": 1790700000, "tz_offset_min": 120}` | |
 | POST | `/api/location` | `{"lat": 38.72, "lon": -9.14, "elev_m": 50}` | saved |
 | POST | `/api/target` | `{"az": 180, "el": 10}` or `{"mode": "point", "x": 0, "y": 10, "z": 2}` | saved |
@@ -260,6 +262,8 @@ above the horizon.
 | POST | `/api/jog` | `{"axis": 0, "delta_deg": 1.0}` or `{"axis": 1, "abs_deg": 30}` | manual mode only; axis 0 = azimuth, 1 = elevation |
 | POST | `/api/clear` | | clear a latched fault → idle (refused while the physical E-stop is pressed) |
 | POST | `/api/wifi/forget` | | clear the network, reboot into BLE provisioning |
+| POST | `/api/servo` | `{"axis": "el", "set": {"cw_dead": 1, "ccw_dead": 1}}` | tune a servo (EEPROM: unlocked, written, locked). Only `p_gain` `d_gain` `i_gain` (0–254) and `cw_dead` `ccw_dead` (0–32 steps); only in idle, manual, fault or E-stop |
+| POST | `/api/ota` | the firmware image (`micropython.bin`), raw; headers `X-OTA-Token`, `X-SHA256` | update over WiFi (AtomS3R): written to the spare slot, checked, booted on probation, rolled back if it fails. Only in idle, manual, fault or E-stop. Step by step: [docs/ota.md](ota.md) |
 | POST | `/api/imu/level` | | adopt the base's current attitude as level (once, after installing); saved. 409 if no IMU |
 
 `POST /api/mode {"mode": "estop"}` is a **software** E-stop: it latches, releases

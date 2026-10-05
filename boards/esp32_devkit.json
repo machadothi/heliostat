@@ -3,7 +3,11 @@
   "profile": "esp32_devkit",
   "micropython_board": "ESP32_GENERIC",
   "chip": "esp32",
-  "usb_match": ["CP210", "Silicon_Labs"],
+  "usb_match": [
+    "CP210",
+    "Silicon_Labs"
+  ],
   "app_offset": "0x10000",
-  "full_image_offset": "0x1000"
+  "full_image_offset": "0x1000",
+  "ota": false
 }
